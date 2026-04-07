@@ -1,0 +1,16 @@
+# Blueprint do Render — cria/atualiza o Web Service ao conectar o repositório.
+# Variáveis secretas: defina no painel Render (Environment) após o primeiro deploy.
+# Documentação: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: morais-streamlit
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
