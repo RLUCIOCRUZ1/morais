@@ -6,7 +6,6 @@ import streamlit as st
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from services.supabase_client import (
     supabase,
     atualizar_parcela_pago,
@@ -408,7 +407,8 @@ st.divider()
 _secao_fin_header(
     "2 · Visão por data de pagamento (efetivo)",
     "Somente parcelas **já quitadas**, pela data em que foram baixadas (saída real de caixa). "
-    "O período abaixo é independente dos filtros Ano/Mês de vencimento. Cor verde nesta seção.",
+    "O intervalo **De/Até** é pela data de baixa; **grupo, marca, fornecedor** e **Ano/Mês** "
+    "(vencimento) do topo também filtram as linhas. Cor verde nesta seção.",
     COR_PAGAMENTO,
     "rgba(236, 253, 245, 0.92)",
 )
@@ -452,87 +452,38 @@ df_efet = df_efet.dropna(subset=["data_baixa"])
 dnorm = df_efet["data_baixa"].dt.normalize().dt.date
 df_efet = df_efet.loc[(dnorm >= d_ini) & (dnorm <= d_fim)]
 
+st.markdown("#### Pagamentos efetivos por dia")
+st.caption(
+    "Somente parcelas **pagas** (`pago`), agrupadas pela **data de baixa** (`data_quitacao`) "
+    "dentro do período acima. Inclui os filtros de **grupo, marca, fornecedor** e **Ano/Mês** "
+    "(vencimento) do topo, quando usados."
+)
+
 if df_efet.empty:
-    fig_por_data = go.Figure()
-    fig_por_data.add_annotation(
-        text=(
-            "Nenhuma parcela paga com data de baixa neste período. "
-            "Ajuste as datas acima ou use a baixa de parcelas (coluna data_quitacao no Supabase)."
-        ),
-        xref="paper",
-        yref="paper",
-        x=0.5,
-        y=0.5,
-        showarrow=False,
-        font=dict(size=13, color="#475569"),
+    st.info(
+        "Nenhuma parcela paga com data de baixa neste período. "
+        "Ajuste as datas acima ou registre a baixa na seção **Baixa de parcelas** abaixo."
     )
-    fig_por_data.update_layout(
-        title="Evolução por data de pagamento (efetivo)",
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-    )
-    _layout_plotly_base(fig_por_data, altura=320)
 else:
-    dmin = df_efet["data_baixa"].min()
-    dmax = df_efet["data_baixa"].max()
-    span_days = max((dmax - dmin).days + 1, 1)
-    db = pd.to_datetime(df_efet["data_baixa"])
-    if span_days > 90:
-        df_efet["_bucket"] = db.dt.to_period("W-MON").dt.to_timestamp()
-        titulo_periodo = "Evolução dos pagamentos efetivos por semana"
-        eixo_x = "Semana (início na segunda-feira)"
-    else:
-        df_efet["_bucket"] = db.dt.strftime("%Y-%m-%d")
-
-    df_por_data = (
-        df_efet.groupby("_bucket", as_index=False)
+    df_efet["dia_baixa"] = pd.to_datetime(df_efet["data_baixa"]).dt.normalize()
+    tbl_dia = (
+        df_efet.groupby("dia_baixa", as_index=False)
         .agg(
-            valor=("valor_parcela", "sum"),
-            qtd_parcelas=("valor_parcela", "count"),
+            valor_pago=("valor_parcela", "sum"),
+            parcelas_quitadas=("valor_parcela", "count"),
+            pedidos_distintos=("pedido_id", "nunique"),
         )
-        .sort_values("_bucket")
+        .sort_values("dia_baixa")
     )
-    df_por_data["periodo"] = pd.to_datetime(df_por_data["_bucket"])
-    df_por_data = df_por_data.drop(columns=["_bucket"])
-
-    if span_days <= 90:
-        titulo_periodo = "Evolução dos pagamentos efetivos por dia"
-        eixo_x = "Data do pagamento (baixa)"
-
-    fig_por_data = go.Figure(
-        go.Scatter(
-            x=df_por_data["periodo"],
-            y=df_por_data["valor"],
-            mode="lines+markers",
-            line=dict(color=COR_PAGAMENTO, width=2.75),
-            marker=dict(size=10, color=COR_PAGAMENTO, line=dict(width=1, color="white")),
-            name="Valor pago",
-            hovertemplate=(
-                "<b>%{x|%d/%m/%Y}</b><br>"
-                "<b>Total pago:</b> R$ %{y:,.2f}<br>"
-                "<b>Parcelas quitadas:</b> %{customdata[0]:.0f}<extra></extra>"
-            ),
-            customdata=df_por_data[["qtd_parcelas"]].values,
-        )
+    disp = pd.DataFrame(
+        {
+            "Data (baixa)": tbl_dia["dia_baixa"].dt.strftime("%d/%m/%Y"),
+            "Valor pago (R$)": tbl_dia["valor_pago"].map(formatar_moeda_br),
+            "Parcelas quitadas": tbl_dia["parcelas_quitadas"].astype(int),
+            "Pedidos (com baixa neste dia)": tbl_dia["pedidos_distintos"].astype(int),
+        }
     )
-    fig_por_data.update_layout(
-        title=titulo_periodo,
-        xaxis_title=eixo_x,
-        yaxis_title="Valor pago (R$)",
-        showlegend=False,
-    )
-    _layout_plotly_base(fig_por_data)
-    fig_por_data.update_yaxes(rangemode="tozero", gridcolor="rgba(148,163,184,0.25)")
-    fig_por_data.update_xaxes(
-        type="date",
-        tickmode="array",
-        tickvals=df_por_data["periodo"].tolist(),
-        tickformat="%d/%m/%Y",
-        tickangle=-35,
-        gridcolor="rgba(148,163,184,0.2)",
-    )
-
-st.plotly_chart(fig_por_data, width="stretch")
+    st.dataframe(disp, hide_index=True, width="stretch")
 
 st.markdown(
     f"<p style='font-size:0.9rem;color:#475569;margin:0.75rem 0 0.35rem 0;'>"
