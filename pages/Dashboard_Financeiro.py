@@ -7,7 +7,6 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from services.supabase_client import (
     supabase,
     atualizar_parcela_pago,
@@ -135,6 +134,10 @@ COR_VENCIMENTO = "#2563eb"
 COR_PAGAMENTO = "#059669"
 
 st.set_page_config(page_title="Dashboard Financeiro", layout="wide")
+
+from services.auth import require_admin
+
+require_admin()
 
 show_sidebar_branding()
 
@@ -293,13 +296,6 @@ st.caption(
 # =========================
 st.divider()
 
-df_grafico = df_filtrado.groupby("mes", as_index=False).agg(
-    valor_parcela=("valor_parcela", "sum"),
-    qtd_parcelas=("valor_parcela", "count"),
-)
-df_grafico["mes_ano"] = df_grafico["mes"].dt.strftime("%m/%Y")
-df_grafico = df_grafico.sort_values("mes")
-
 _secao_fin_header(
     "1 · Visão por data de vencimento",
     "Compromissos futuros ou planejados: o agrupamento usa a data de vencimento de cada parcela "
@@ -307,44 +303,6 @@ _secao_fin_header(
     COR_VENCIMENTO,
     "rgba(239, 246, 255, 0.92)",
 )
-
-fig_mes = make_subplots(specs=[[{"secondary_y": True}]])
-
-fig_mes.add_trace(
-    go.Bar(
-        x=df_grafico["mes_ano"],
-        y=df_grafico["valor_parcela"],
-        name="Valor (R$)",
-        marker_color=COR_VENCIMENTO,
-        hovertemplate="<b>Mês vencimento:</b> %{x}<br><b>Valor:</b> R$ %{y:,.2f}<extra></extra>",
-    ),
-    secondary_y=False,
-)
-fig_mes.add_trace(
-    go.Scatter(
-        x=df_grafico["mes_ano"],
-        y=df_grafico["qtd_parcelas"],
-        name="Qtd. parcelas",
-        mode="lines+markers",
-        line=dict(color="#d97706", width=2),
-        marker=dict(size=7, color="#d97706"),
-        hovertemplate="<b>Mês vencimento:</b> %{x}<br><b>Parcelas:</b> %{y:.0f}<extra></extra>",
-    ),
-    secondary_y=True,
-)
-
-fig_mes.update_layout(
-    title="Valor das parcelas por mês de vencimento",
-    xaxis_title="Mês de vencimento (mm/aaaa)",
-    hovermode="x unified",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-)
-_layout_plotly_base(fig_mes)
-fig_mes.update_yaxes(title_text="Valor (R$)", secondary_y=False, gridcolor="rgba(148,163,184,0.25)")
-fig_mes.update_yaxes(title_text="Parcelas", secondary_y=True, gridcolor="rgba(148,163,184,0.15)")
-fig_mes.update_xaxes(gridcolor="rgba(148,163,184,0.2)")
-
-st.plotly_chart(fig_mes, width="stretch")
 
 # Top fornecedor / marca (mesmo recorte por vencimento)
 df_top_f = (

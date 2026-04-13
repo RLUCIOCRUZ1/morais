@@ -34,6 +34,35 @@ def inserir_parcelas(parcelas):
     return response.data
 
 
+def listar_condicoes_pagamento():
+    """Condições reutilizáveis (dias após chegada). Retorna [] se a tabela não existir."""
+    try:
+        response = (
+            supabase.table("condicoes_pagamento")
+            .select("id, nome, qtd_parcelas, prazos_dias")
+            .order("nome")
+            .execute()
+        )
+        return response.data or []
+    except Exception:
+        return []
+
+
+def inserir_condicao_pagamento(nome: str, qtd_parcelas: int, prazos_dias: list):
+    """prazos_dias: lista de inteiros, mesmo tamanho que qtd_parcelas."""
+    row = {
+        "nome": nome.strip(),
+        "qtd_parcelas": int(qtd_parcelas),
+        "prazos_dias": [int(x) for x in prazos_dias],
+    }
+    response = supabase.table("condicoes_pagamento").insert(row).execute()
+    return response.data
+
+
+def excluir_condicao_pagamento(condicao_id: int):
+    supabase.table("condicoes_pagamento").delete().eq("id", condicao_id).execute()
+
+
 def listar_pedidos_resumo(limite=500):
     """Lista pedidos para edição / recebimento (mais recentes primeiro).
 

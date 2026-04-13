@@ -1,6 +1,13 @@
 import streamlit as st
 
+from services.auth import (
+    init_auth_session,
+    is_admin,
+    is_logged_in,
+    login_por_email_senha,
+)
 from services.branding import show_home_logo_centered, show_sidebar_branding
+from services import usuarios_app as ua
 
 st.set_page_config(
     page_title="Controle de OTB e Fluxo de Caixa",
@@ -9,6 +16,66 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+init_auth_session()
+
+
+def _contar_usuarios_ou_erro() -> int | None:
+    try:
+        return ua.contar_usuarios()
+    except Exception:
+        return None
+
+
+n_usuarios = _contar_usuarios_ou_erro()
+
+if n_usuarios is None:
+    show_sidebar_branding()
+    st.error(
+        "Não foi possível ler a tabela **app_usuarios**. "
+        "Execute a migração `supabase/migrations/004_app_usuarios.sql` no SQL Editor do Supabase."
+    )
+    st.stop()
+
+# --- Primeiro acesso: criar administrador (só se a tabela estiver vazia) ---
+if n_usuarios == 0:
+    show_sidebar_branding()
+    st.warning("Primeiro acesso: crie o usuário **administrativo** inicial.")
+    with st.form("bootstrap_admin"):
+        b_nome = st.text_input("Nome")
+        b_email = st.text_input("E-mail (será o login)")
+        b_senha = st.text_input("Senha", type="password")
+        b_senha2 = st.text_input("Repita a senha", type="password")
+        if st.form_submit_button("Criar administrador", type="primary", width="stretch"):
+            if not b_nome.strip():
+                st.error("Informe o nome.")
+            elif b_senha != b_senha2:
+                st.error("As senhas não coincidem.")
+            else:
+                try:
+                    ua.criar_usuario(b_nome, b_email, b_senha, "admin")
+                    st.success("Administrador criado. Faça login abaixo na próxima execução.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+    st.stop()
+
+# --- Login ---
+if not is_logged_in():
+    show_sidebar_branding()
+    st.markdown("### Entrar")
+    with st.form("login_form"):
+        lg_email = st.text_input("E-mail")
+        lg_senha = st.text_input("Senha", type="password")
+        ok = st.form_submit_button("Entrar", type="primary", width="stretch")
+        if ok:
+            success, err = login_por_email_senha(lg_email, lg_senha)
+            if success:
+                st.rerun()
+            else:
+                st.error(err or "Falha no login.")
+    st.stop()
+
+# --- Home autenticada ---
 show_sidebar_branding()
 
 st.markdown(
@@ -29,7 +96,6 @@ st.markdown(
         margin-bottom: 0;
         letter-spacing: -0.02em;
     }
-    /* Títulos dos cards em uma linha (telas largas); em mobile pode quebrar */
     div[data-testid="stVerticalBlockBorderWrapper"] h3 {
         font-size: 1.12rem !important;
         line-height: 1.35 !important;
@@ -69,7 +135,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-col1, col2, col3 = st.columns(3, gap="large")
+if is_admin():
+    col1, col2, col3 = st.columns(3, gap="large")
+else:
+    col1, col2 = st.columns(2, gap="large")
+    col3 = None
 
 with col1:
     with st.container(border=True):
@@ -98,24 +168,35 @@ with col2:
         ):
             st.switch_page("pages/Dashboard_OTB.py")
 
-with col3:
-    with st.container(border=True):
-        st.markdown("### 💰 Dashboard Financeiro")
-        st.caption(
-            "Fluxo de caixa: parcelas pagas, fornecedores, marcas e indicadores."
-        )
-        if st.button(
-            "Abrir Financeiro",
-            key="go_fin",
-            width="stretch",
-        ):
-            st.switch_page("pages/Dashboard_Financeiro.py")
+if col3 is not None:
+    with col3:
+        with st.container(border=True):
+            st.markdown("### 💰 Dashboard Financeiro")
+            st.caption(
+                "Fluxo de caixa: parcelas pagas, fornecedores, marcas e indicadores."
+            )
+            if st.button(
+                "Abrir Financeiro",
+                key="go_fin",
+                width="stretch",
+            ):
+                st.switch_page("pages/Dashboard_Financeiro.py")
+
+if is_admin():
+    st.divider()
+    st.markdown("#### Administração")
+    if st.button(
+        "👤 Gerenciar usuários e perfis (alçadas)",
+        key="go_admin_users",
+        width="stretch",
+        help="Criar logins e definir Administrativo ou Cadastro.",
+    ):
+        st.switch_page("pages/Admin_usuarios.py")
 
 st.markdown(
     """
     <p class="home-footnote">
-        Você também pode usar o menu <strong>⋮</strong> no canto superior esquerdo
-        para navegar entre as páginas.
+        Use o menu lateral para navegar. Perfil <strong>Cadastro</strong> não vê o financeiro.
     </p>
     """,
     unsafe_allow_html=True,

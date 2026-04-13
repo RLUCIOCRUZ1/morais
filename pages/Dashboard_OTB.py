@@ -8,8 +8,6 @@ from services.supabase_client import (
 )
 from services.branding import show_sidebar_branding
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import locale
 
 try:
@@ -41,6 +39,10 @@ def formatar_moeda_br(valor):
 
 
 st.set_page_config(page_title="OTB", layout="wide")
+
+from services.auth import require_login
+
+require_login()
 
 show_sidebar_branding()
 
@@ -292,92 +294,6 @@ st.subheader("📊 Indicadores OTB")
 if df_filtrado.empty:
     st.info("Sem linhas de OTB em aberto para este filtro.")
 else:
-    df_grafico = (
-        df_filtrado.groupby("mes", as_index=False)
-        .agg(total_qtd=("total_qtd", "sum"), total_valor=("total_valor", "sum"))
-        .sort_values("mes")
-    )
-    df_grafico["mes_ano"] = df_grafico["mes"].dt.strftime("%m/%Y")
-
-    fig_mes = make_subplots(specs=[[{"secondary_y": True}]])
-
-    fig_mes.add_trace(
-        go.Bar(
-            x=df_grafico["mes_ano"],
-            y=df_grafico["total_valor"],
-            name="Valor (R$)",
-            marker_color="#3366cc",
-            hovertemplate="<b>Mês:</b> %{x}<br><b>Valor:</b> R$ %{y:,.2f}<extra></extra>",
-        ),
-        secondary_y=False,
-    )
-    fig_mes.add_trace(
-        go.Scatter(
-            x=df_grafico["mes_ano"],
-            y=df_grafico["total_qtd"],
-            name="Quantidade",
-            mode="lines+markers",
-            line=dict(color="#dc3912"),
-            hovertemplate="<b>Mês:</b> %{x}<br><b>Qtd:</b> %{y:,.0f}<extra></extra>",
-        ),
-        secondary_y=True,
-    )
-
-    fig_mes.update_layout(
-        title="OTB por mês — valor e quantidade",
-        xaxis_title="Mês",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hoverlabel=dict(bgcolor="white"),
-    )
-    fig_mes.update_yaxes(title_text="Valor (R$)", secondary_y=False)
-    fig_mes.update_yaxes(title_text="Quantidade", secondary_y=True)
-
-    g1, g2 = st.columns(2)
-    with g1:
-        st.plotly_chart(fig_mes, width="stretch")
-
-    df_cum = df_grafico.copy()
-    df_cum["valor_acumulado"] = df_cum["total_valor"].cumsum()
-    df_cum["qtd_acumulada"] = df_cum["total_qtd"].cumsum()
-
-    fig_acum = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_acum.add_trace(
-        go.Scatter(
-            x=df_cum["mes_ano"],
-            y=df_cum["valor_acumulado"],
-            name="Valor acumulado (R$)",
-            mode="lines",
-            fill="tozeroy",
-            line=dict(color="#109618"),
-            hovertemplate="<b>%{x}</b><br>Acumulado: R$ %{y:,.2f}<extra></extra>",
-        ),
-        secondary_y=False,
-    )
-    fig_acum.add_trace(
-        go.Scatter(
-            x=df_cum["mes_ano"],
-            y=df_cum["qtd_acumulada"],
-            name="Qtd acumulada",
-            mode="lines+markers",
-            line=dict(color="#ff9900"),
-            hovertemplate="<b>%{x}</b><br>Acumulado: %{y:,.0f} un.<extra></extra>",
-        ),
-        secondary_y=True,
-    )
-    fig_acum.update_layout(
-        title="Evolução acumulada no tempo",
-        xaxis_title="Mês",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hoverlabel=dict(bgcolor="white"),
-    )
-    fig_acum.update_yaxes(title_text="Valor acumulado (R$)", secondary_y=False)
-    fig_acum.update_yaxes(title_text="Qtd acumulada", secondary_y=True)
-
-    with g2:
-        st.plotly_chart(fig_acum, width="stretch")
-
     df_top_m = (
         df_filtrado.groupby("marca", as_index=False)
         .agg(total_valor=("total_valor", "sum"))

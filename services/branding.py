@@ -49,15 +49,34 @@ def logo_exists() -> bool:
 
 def show_sidebar_branding():
     """Logo na barra lateral, acima dos links das páginas."""
+    from services.auth import is_admin, is_logged_in, show_auth_controls_sidebar
+
     st.markdown(_SIDEBAR_LOGO_FIRST_CSS, unsafe_allow_html=True)
-    if not logo_exists():
-        return
     with st.sidebar:
-        st.image(str(LOGO_PATH), width="stretch")
-        st.markdown(
-            '<hr style="margin:0.2rem 0 0.15rem 0;border:none;border-top:1px solid rgba(0,0,0,0.10);">',
-            unsafe_allow_html=True,
-        )
+        if logo_exists():
+            st.image(str(LOGO_PATH), width="stretch")
+            st.markdown(
+                '<hr style="margin:0.2rem 0 0.15rem 0;border:none;border-top:1px solid rgba(0,0,0,0.10);">',
+                unsafe_allow_html=True,
+            )
+        show_auth_controls_sidebar()
+
+        # Perfil cadastro: menu lateral igual ao admin no HTML, mas só vê links permitidos
+        # (app + Cadastro + OTB). Financeiro e Usuários ficam ocultos via CSS.
+        if is_logged_in() and not is_admin():
+            st.markdown(
+                """
+<style>
+[data-testid="stSidebarNav"] li:has(a[href*="Dashboard_Financeiro"]),
+[data-testid="stSidebarNav"] li:has(a[href*="dashboard_financeiro"]),
+[data-testid="stSidebarNav"] li:has(a[href*="Admin_usuarios"]),
+[data-testid="stSidebarNav"] li:has(a[href*="admin_usuarios"]) {
+    display: none !important;
+}
+</style>
+""",
+                unsafe_allow_html=True,
+            )
 
 
 def show_home_logo_centered():
