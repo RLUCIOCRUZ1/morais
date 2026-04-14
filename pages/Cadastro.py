@@ -288,7 +288,7 @@ if modo == "Editar pedido existente":
                     try:
                         pid_x = _labels[sel_ex]
                         excluir_pedido_completo(pid_x)
-                        _invalidar_cache_pedidos_resumo()
+                        st.cache_data.clear()
                         st.session_state.sucesso = f"Pedido {pid_x} excluído."
                         if st.session_state.pedido_editando_id == pid_x:
                             _limpar_estado_formulario_cadastro()
@@ -321,7 +321,7 @@ if st.session_state.pedido_editando_id:
                 try:
                     pid_del = st.session_state.pedido_editando_id
                     excluir_pedido_completo(pid_del)
-                    _invalidar_cache_pedidos_resumo()
+                    st.cache_data.clear()
                     st.session_state.sucesso = f"Pedido {pid_del} excluído."
                     _limpar_estado_formulario_cadastro()
                     st.rerun()
@@ -779,7 +779,7 @@ if st.button(_btn_label, width="stretch"):
             inserir_parcelas(parcelas_insert)
             st.session_state.sucesso = f"Pedido salvo com sucesso! ID: {pedido_id}"
 
-        _invalidar_cache_pedidos_resumo()
+        st.cache_data.clear()
         _limpar_estado_formulario_cadastro()
         st.rerun()
 

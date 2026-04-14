@@ -69,6 +69,8 @@ def show_sidebar_branding():
 <style>
 [data-testid="stSidebarNav"] li:has(a[href*="Dashboard_Financeiro"]),
 [data-testid="stSidebarNav"] li:has(a[href*="dashboard_financeiro"]),
+[data-testid="stSidebarNav"] li:has(a[href*="Meta_Fluxo_Caixa"]),
+[data-testid="stSidebarNav"] li:has(a[href*="meta_fluxo_caixa"]),
 [data-testid="stSidebarNav"] li:has(a[href*="Admin_usuarios"]),
 [data-testid="stSidebarNav"] li:has(a[href*="admin_usuarios"]) {
     display: none !important;

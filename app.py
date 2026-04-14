@@ -136,10 +136,10 @@ st.markdown(
 )
 
 if is_admin():
-    col1, col2, col3 = st.columns(3, gap="large")
+    col1, col2, col3, col4 = st.columns(4, gap="large")
 else:
     col1, col2 = st.columns(2, gap="large")
-    col3 = None
+    col3 = col4 = None
 
 with col1:
     with st.container(border=True):
@@ -181,6 +181,20 @@ if col3 is not None:
                 width="stretch",
             ):
                 st.switch_page("pages/Dashboard_Financeiro.py")
+
+if col4 is not None:
+    with col4:
+        with st.container(border=True):
+            st.markdown("### 🎯 Meta Fluxo de Caixa")
+            st.caption(
+                "Cadastre metas mensais para comparar com o realizado no financeiro."
+            )
+            if st.button(
+                "Abrir Metas",
+                key="go_metas",
+                width="stretch",
+            ):
+                st.switch_page("pages/Meta_Fluxo_Caixa.py")
 
 if is_admin():
     st.divider()

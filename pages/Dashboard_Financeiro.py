@@ -11,6 +11,7 @@ from services.supabase_client import (
     atualizar_parcela_pago,
     data_baixa_hoje_iso,
     fetch_parcelas_para_financeiro,
+    listar_metas_fluxo_caixa,
 )
 from services.branding import show_sidebar_branding
 
@@ -589,11 +590,146 @@ else:
                 st.error(f"Erro ao salvar (migração SQL e permissões RLS): {e}")
 
 # =========================
+# META x REALIZADO
+# =========================
+st.divider()
+_secao_fin_header(
+    "3 · Meta x Realizado — Fluxo de Caixa",
+    "Comparativo mensal entre a **meta de fluxo de caixa** cadastrada e o **valor realizado** "
+    "(soma das parcelas já quitadas no mês pela data de baixa). "
+    "Cadastre metas na página **Meta Fluxo de Caixa**.",
+    "#7c3aed",
+    "rgba(245, 243, 255, 0.92)",
+)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _carregar_metas_financeiro():
+    return listar_metas_fluxo_caixa()
+
+
+_metas_raw = _carregar_metas_financeiro()
+
+if not _metas_raw:
+    st.info(
+        "Nenhuma meta de fluxo de caixa cadastrada. "
+        "Acesse a página **Meta Fluxo de Caixa** no menu lateral para cadastrar."
+    )
+else:
+    df_metas = pd.DataFrame(_metas_raw)
+    df_metas["ano"] = df_metas["ano"].astype(int)
+    df_metas["mes"] = df_metas["mes"].astype(int)
+    df_metas["valor"] = pd.to_numeric(df_metas["valor"], errors="coerce").fillna(0)
+    df_metas["mes_ano_key"] = df_metas.apply(
+        lambda r: f"{int(r['ano'])}-{int(r['mes']):02d}", axis=1
+    )
+
+    df_todas = df.copy()
+    df_todas["mes_ano_key"] = df_todas["data_pagamento"].dt.strftime("%Y-%m")
+    realizado_mes = (
+        df_todas.dropna(subset=["mes_ano_key"])
+        .groupby("mes_ano_key", as_index=False)["valor_parcela"]
+        .sum()
+        .rename(columns={"valor_parcela": "realizado"})
+    )
+
+    df_comp = df_metas[["mes_ano_key", "ano", "mes", "valor"]].rename(
+        columns={"valor": "meta"}
+    )
+    df_comp = df_comp.merge(realizado_mes, on="mes_ano_key", how="left")
+    df_comp["realizado"] = df_comp["realizado"].fillna(0)
+    df_comp["saldo"] = df_comp["meta"] - df_comp["realizado"]
+    df_comp = df_comp.sort_values(["ano", "mes"])
+    df_comp["mes_ano_label"] = df_comp.apply(
+        lambda r: f"{int(r['mes']):02d}/{int(r['ano'])}", axis=1
+    )
+
+    fig_comp = px.bar(
+        df_comp.melt(
+            id_vars=["mes_ano_label"],
+            value_vars=["meta", "realizado"],
+            var_name="Tipo",
+            value_name="Valor",
+        ),
+        x="mes_ano_label",
+        y="Valor",
+        color="Tipo",
+        barmode="group",
+        text="Valor",
+        labels={"mes_ano_label": "Mês/Ano", "Valor": "Valor (R$)"},
+        color_discrete_map={"meta": "#7c3aed", "realizado": "#059669"},
+    )
+    fig_comp.update_traces(
+        texttemplate="R$ %{text:,.0f}",
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>%{data.name}: R$ %{y:,.2f}<extra></extra>",
+    )
+    fig_comp.update_layout(
+        title="Meta x Realizado por mês",
+        legend_title_text="",
+        xaxis_title="",
+        yaxis_title="Valor (R$)",
+    )
+    _layout_plotly_base(fig_comp, altura=420)
+    st.plotly_chart(fig_comp, width="stretch")
+
+    rows_tabela = []
+    for _, r in df_comp.iterrows():
+        saldo = r["saldo"]
+        if saldo >= 0:
+            cor = "green"
+            saldo_fmt = formatar_moeda_br(saldo)
+        else:
+            cor = "red"
+            saldo_fmt = f"- {formatar_moeda_br(abs(saldo))}"
+        rows_tabela.append({
+            "Mês/Ano": r["mes_ano_label"],
+            "Meta Fluxo": formatar_moeda_br(r["meta"]),
+            "Valor Realizado": formatar_moeda_br(r["realizado"]),
+            "_saldo_fmt": saldo_fmt,
+            "_saldo_cor": cor,
+        })
+
+    df_tabela = pd.DataFrame(rows_tabela)
+
+    html_rows = ""
+    for _, row in df_tabela.iterrows():
+        cor = row["_saldo_cor"]
+        html_rows += (
+            f"<tr>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #e2e8f0;'>{row['Mês/Ano']}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:right;'>{row['Meta Fluxo']}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:right;'>{row['Valor Realizado']}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:right;"
+            f"color:{cor};font-weight:700;'>{row['_saldo_fmt']}</td>"
+            f"</tr>"
+        )
+
+    st.markdown(
+        f"""
+        <table style="width:100%;border-collapse:collapse;font-size:0.95rem;margin-top:0.5rem;">
+            <thead>
+                <tr style="background:#f8fafc;">
+                    <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #cbd5e1;">Mês/Ano</th>
+                    <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #cbd5e1;">Meta Fluxo</th>
+                    <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #cbd5e1;">Valor Realizado</th>
+                    <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #cbd5e1;">Saldo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {html_rows}
+            </tbody>
+        </table>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================
 # TABELA DETALHADA
 # =========================
 st.divider()
 _secao_fin_header(
-    "3 · Detalhamento consolidado",
+    "4 · Detalhamento consolidado",
     "Cada linha mostra **vencimento** e **pagamento** (quando houver) para conferência cruzada.",
     "#64748b",
     "rgba(248, 250, 252, 0.95)",

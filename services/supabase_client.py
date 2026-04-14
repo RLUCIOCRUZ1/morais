@@ -230,6 +230,34 @@ def buscar_pedido_ids_por_descricao(descricoes: list) -> set:
         return set()
 
 
+def listar_metas_fluxo_caixa():
+    try:
+        resp = (
+            supabase.table("metas_fluxo_caixa")
+            .select("id, ano, mes, valor")
+            .order("ano")
+            .order("mes")
+            .execute()
+        )
+        return resp.data or []
+    except Exception:
+        return []
+
+
+def upsert_meta_fluxo_caixa(ano: int, mes: int, valor: float):
+    row = {"ano": int(ano), "mes": int(mes), "valor": float(valor)}
+    resp = (
+        supabase.table("metas_fluxo_caixa")
+        .upsert(row, on_conflict="ano,mes")
+        .execute()
+    )
+    return resp.data
+
+
+def excluir_meta_fluxo_caixa(meta_id: int):
+    supabase.table("metas_fluxo_caixa").delete().eq("id", meta_id).execute()
+
+
 def buscar_dados_otb():
     response = supabase.table("vw_otb").select("*").execute()
     return response.data
