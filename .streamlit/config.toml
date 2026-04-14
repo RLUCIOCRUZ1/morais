@@ -1,0 +1,14 @@
+[server]
+headless = true
+runOnSave = false
+fileWatcherType = "none"
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showSidebarNavigation = true
+
+[theme]
+base = "light"
