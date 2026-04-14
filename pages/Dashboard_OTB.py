@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from services.supabase_client import (
     atualizar_pedido_recebimento,
+    buscar_pedido_ids_por_descricao,
     data_baixa_hoje_iso,
     fetch_otb_pipeline,
     listar_pedidos_resumo,
@@ -83,6 +84,7 @@ if df.empty:
             "grupo",
             "marca",
             "referencia",
+            "descricao",
             "mes",
             "total_qtd",
             "total_valor",
@@ -94,6 +96,9 @@ if df.empty:
 else:
     df["mes"] = pd.to_datetime(df["mes"])
     df["mes_ano"] = df["mes"].dt.strftime("%m/%Y")
+    if "descricao" not in df.columns:
+        df["descricao"] = ""
+    df["descricao"] = df["descricao"].fillna("").astype(str).str.strip()
     if "data_recebimento" not in df.columns:
         df["data_recebimento"] = pd.NaT
     else:
@@ -104,13 +109,15 @@ else:
 # =========================
 st.subheader("🔎 Filtros")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 grupo_sel = col1.multiselect("Grupo", sorted(df["grupo"].dropna().unique()))
 marca_sel = col2.multiselect("Marca", sorted(df["marca"].dropna().unique()))
 ref_sel = col3.multiselect("Referência", sorted(df["referencia"].dropna().unique()))
-ano_sel = col4.multiselect("Ano", sorted(df["mes"].dt.year.dropna().unique()))
-mes_sel = col5.multiselect("Mês", sorted(df["mes"].dt.month.dropna().unique()))
+desc_opcoes = sorted(df.loc[df["descricao"] != "", "descricao"].unique())
+desc_sel = col4.multiselect("Descrição", desc_opcoes)
+ano_sel = col5.multiselect("Ano", sorted(df["mes"].dt.year.dropna().unique()))
+mes_sel = col6.multiselect("Mês", sorted(df["mes"].dt.month.dropna().unique()))
 
 # =========================
 # 🔍 APLICA FILTRO
@@ -125,6 +132,9 @@ if marca_sel:
 
 if ref_sel:
     df_filtrado = df_filtrado[df_filtrado["referencia"].isin(ref_sel)]
+
+if desc_sel:
+    df_filtrado = df_filtrado[df_filtrado["descricao"].isin(desc_sel)]
 
 if ano_sel:
     df_filtrado = df_filtrado[df_filtrado["mes"].dt.year.isin(ano_sel)]
@@ -155,7 +165,7 @@ st.subheader("📬 Controle de recebimento")
 st.caption(
     "Só aparecem pedidos **pendentes de recebimento**. Ao marcar **Recebido** e salvar, gravamos automaticamente "
     "a **data de hoje** (fuso Brasil) e o pedido some desta lista e do OTB “em aberto”. "
-    "Os filtros **Grupo** e **Marca** limitam a lista."
+    "Todos os filtros acima limitam a lista."
 )
 
 ped_rcv = carregar_pedidos_recebimento()
@@ -166,6 +176,12 @@ else:
         ped_rcv = ped_rcv[ped_rcv["grupo"].isin(grupo_sel)]
     if marca_sel:
         ped_rcv = ped_rcv[ped_rcv["marca"].isin(marca_sel)]
+    if desc_sel:
+        ids_com_desc = buscar_pedido_ids_por_descricao(desc_sel)
+        if ids_com_desc:
+            ped_rcv = ped_rcv[ped_rcv["id"].isin(ids_com_desc)]
+        else:
+            ped_rcv = ped_rcv.iloc[0:0]
 
     if "recebido" not in ped_rcv.columns:
         ped_rcv["recebido"] = False
@@ -173,6 +189,10 @@ else:
         ped_rcv["recebido"] = ped_rcv["recebido"].fillna(False).astype(bool)
 
     ped_rcv["data_chegada"] = pd.to_datetime(ped_rcv["data_chegada"], errors="coerce")
+    if ano_sel:
+        ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.year.isin(ano_sel)]
+    if mes_sel:
+        ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.month.isin(mes_sel)]
     ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
     ped_show = ped_rcv.sort_values("id", ascending=False)[
         [
@@ -361,31 +381,66 @@ else:
         .agg(total_valor=("total_valor", "sum"))
         .dropna(subset=["marca"])
     )
-    if not df_marca_share.empty:
-        df_marca_share = df_marca_share.sort_values("total_valor", ascending=False)
-        top_n = 8
-        if len(df_marca_share) > top_n:
-            outros = df_marca_share.iloc[top_n:]["total_valor"].sum()
-            df_marca_share = pd.concat(
-                [
-                    df_marca_share.head(top_n),
-                    pd.DataFrame([{"marca": "Outros", "total_valor": outros}]),
-                ],
-                ignore_index=True,
+
+    df_desc_bar = (
+        df_filtrado.loc[df_filtrado["descricao"] != ""]
+        .groupby("descricao", as_index=False)
+        .agg(total_valor=("total_valor", "sum"))
+        .nlargest(12, "total_valor")
+    )
+
+    g_pie, g_desc = st.columns(2)
+
+    with g_pie:
+        if not df_marca_share.empty:
+            df_marca_share = df_marca_share.sort_values("total_valor", ascending=False)
+            top_n = 8
+            if len(df_marca_share) > top_n:
+                outros = df_marca_share.iloc[top_n:]["total_valor"].sum()
+                df_marca_share = pd.concat(
+                    [
+                        df_marca_share.head(top_n),
+                        pd.DataFrame([{"marca": "Outros", "total_valor": outros}]),
+                    ],
+                    ignore_index=True,
+                )
+            fig_pie = px.pie(
+                df_marca_share,
+                values="total_valor",
+                names="marca",
+                title="Participação do valor por marca",
+                hole=0.35,
             )
-        fig_pie = px.pie(
-            df_marca_share,
-            values="total_valor",
-            names="marca",
-            title="Participação do valor por marca",
-            hole=0.35,
-        )
-        fig_pie.update_traces(
-            textposition="inside",
-            textinfo="percent+label",
-            hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>",
-        )
-        st.plotly_chart(fig_pie, width="stretch")
+            fig_pie.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+                hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>",
+            )
+            st.plotly_chart(fig_pie, width="stretch")
+
+    with g_desc:
+        if not df_desc_bar.empty:
+            fig_desc = px.bar(
+                df_desc_bar,
+                x="total_valor",
+                y="descricao",
+                orientation="h",
+                text="total_valor",
+                labels={"total_valor": "Valor (R$)", "descricao": "Descrição"},
+            )
+            fig_desc.update_traces(
+                texttemplate="R$ %{text:,.0f}",
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>R$ %{x:,.2f}<extra></extra>",
+            )
+            fig_desc.update_layout(
+                title="Top descrições por valor",
+                yaxis=dict(categoryorder="total ascending"),
+                margin=dict(l=8, r=80, t=48, b=8),
+            )
+            st.plotly_chart(fig_desc, width="stretch")
+        else:
+            st.info("Sem dados de descrição para o período.")
 
 # =========================
 # 📋 GRUPO

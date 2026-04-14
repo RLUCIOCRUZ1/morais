@@ -214,6 +214,22 @@ def atualizar_pedido_recebimento(pedido_id, recebido, data_recebimento=None):
     return response.data
 
 
+def buscar_pedido_ids_por_descricao(descricoes: list) -> set:
+    """Retorna IDs de pedidos que possuem itens com as descrições informadas."""
+    if not descricoes:
+        return set()
+    try:
+        resp = (
+            supabase.table("pedido_itens")
+            .select("pedido_id")
+            .in_("descricao", descricoes)
+            .execute()
+        )
+        return {int(r["pedido_id"]) for r in (resp.data or []) if r.get("pedido_id")}
+    except Exception:
+        return set()
+
+
 def buscar_dados_otb():
     response = supabase.table("vw_otb").select("*").execute()
     return response.data
@@ -270,10 +286,15 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
     """
     import pandas as pd
 
-    items = _fetch_table_all_pages(
-        "pedido_itens", "pedido_id, referencia, quantidade, custo_total"
-    )
-    cols = ["grupo", "marca", "referencia", "mes", "total_qtd", "total_valor", "data_recebimento"]
+    try:
+        items = _fetch_table_all_pages(
+            "pedido_itens", "pedido_id, referencia, descricao, quantidade, custo_total"
+        )
+    except Exception:
+        items = _fetch_table_all_pages(
+            "pedido_itens", "pedido_id, referencia, quantidade, custo_total"
+        )
+    cols = ["grupo", "marca", "referencia", "descricao", "mes", "total_qtd", "total_valor", "data_recebimento"]
     if not items:
         return pd.DataFrame(columns=cols)
 
@@ -340,8 +361,12 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
         hoje_mes = pd.Timestamp.now().normalize().replace(day=1)
     m.loc[m["data_chegada"].isna(), "data_chegada"] = hoje_mes
 
+    if "descricao" not in m.columns:
+        m["descricao"] = ""
+    m["descricao"] = m["descricao"].fillna("").astype(str).str.strip()
+
     m["mes"] = m["data_chegada"].dt.to_period("M").dt.to_timestamp()
-    agg = m.groupby(["grupo", "marca", "referencia", "mes"], as_index=False).agg(
+    agg = m.groupby(["grupo", "marca", "referencia", "descricao", "mes"], as_index=False).agg(
         total_qtd=("quantidade", "sum"),
         total_valor=("custo_total", "sum"),
         data_recebimento=("data_recebimento", "max"),

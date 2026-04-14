@@ -124,6 +124,7 @@ def _aplicar_pedido_na_sessao(ped_row, itens, parcelas):
         {
             "id": x["id"],
             "referencia": (x.get("referencia") or "").strip(),
+            "descricao": (x.get("descricao") or "").strip(),
             "quantidade": int(x.get("quantidade", 1)),
             "custo": float(x.get("custo_unitario", 0)),
         }
@@ -149,7 +150,7 @@ def _aplicar_pedido_na_sessao(ped_row, itens, parcelas):
 
 def _limpar_estado_formulario_cadastro():
     st.session_state.itens = [
-        {"id": None, "referencia": "", "quantidade": 1, "custo": 0.0}
+        {"id": None, "referencia": "", "descricao": "", "quantidade": 1, "custo": 0.0}
     ]
     st.session_state.itens_excluidos = []
     st.session_state.pedido_editando_id = None
@@ -171,7 +172,7 @@ def _limpar_estado_formulario_cadastro():
     st.session_state.form_key += 1
     fk = st.session_state.form_key
     for i in range(len(st.session_state.itens)):
-        for campo in ["ref", "qtd", "custo"]:
+        for campo in ["ref", "desc", "qtd", "custo"]:
             k = f"{campo}_{i}_{fk}"
             if k in st.session_state:
                 del st.session_state[k]
@@ -375,7 +376,7 @@ data_chegada = col4.date_input(
 
 if "itens" not in st.session_state:
     st.session_state.itens = [
-        {"id": None, "referencia": "", "quantidade": 1, "custo": 0.0}
+        {"id": None, "referencia": "", "descricao": "", "quantidade": 1, "custo": 0.0}
     ]
 
 if "itens_excluidos" not in st.session_state:
@@ -396,7 +397,7 @@ def remover_item(index):
 # botão adicionar
 if st.button("➕ Adicionar Referência"):
     st.session_state.itens.append(
-        {"id": None, "referencia": "", "quantidade": 1, "custo": 0.0}
+        {"id": None, "referencia": "", "descricao": "", "quantidade": 1, "custo": 0.0}
     )
 
 
@@ -406,7 +407,7 @@ total_qtd = 0
 
 for i, item in enumerate(st.session_state.itens):
 
-    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 1, 1, 1, 0.5])
 
     referencia = col1.text_input(
         f"Referência {i+1}",
@@ -414,14 +415,20 @@ for i, item in enumerate(st.session_state.itens):
         key=f"ref_{i}_{st.session_state.form_key}"
     )
 
-    quantidade = col2.number_input(
+    descricao = col2.text_input(
+        f"Descrição {i+1}",
+        value=item.get("descricao", ""),
+        key=f"desc_{i}_{st.session_state.form_key}"
+    )
+
+    quantidade = col3.number_input(
         "Qtd",
         min_value=1,
         value=int(item.get("quantidade", 1)),
         key=f"qtd_{i}_{st.session_state.form_key}"
     )
 
-    custo = col3.number_input(
+    custo = col4.number_input(
         "Custo (R$)",
         min_value=0.0,
         format="%.2f",
@@ -431,21 +438,20 @@ for i, item in enumerate(st.session_state.itens):
 
     total_item = quantidade * custo
 
-    col4.write(f"💰 R$ {total_item:,.2f}")
+    col5.write(f"💰 R$ {total_item:,.2f}")
 
-    # BOTÃO REMOVER
     if len(st.session_state.itens) > 1:
-        if col5.button("🗑", key=f"remover_{i}_{st.session_state.form_key}"):
+        if col6.button("🗑", key=f"remover_{i}_{st.session_state.form_key}"):
 
             remover_item(i)
 
             st.session_state.form_key += 1
             st.rerun()
 
-    # atualizar session
     st.session_state.itens[i] = {
         "id": item.get("id"),
         "referencia": referencia,
+        "descricao": descricao,
         "quantidade": quantidade,
         "custo": custo
     }
@@ -689,6 +695,7 @@ if st.button(_btn_label, width="stretch"):
             itens_insert.append(
                 {
                     "referencia": item["referencia"],
+                    "descricao": item.get("descricao", ""),
                     "quantidade": item["quantidade"],
                     "custo_unitario": item["custo"],
                     "custo_total": total_item,
