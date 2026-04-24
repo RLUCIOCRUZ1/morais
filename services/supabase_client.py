@@ -467,12 +467,22 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
     m["descricao"] = m["descricao"].fillna("").astype(str).str.strip()
 
     m["mes"] = m["data_chegada"].dt.to_period("M").dt.to_timestamp()
-    agg = m.groupby(["grupo", "marca", "referencia", "descricao", "mes"], as_index=False).agg(
+
+    grp_cols = ["grupo", "marca", "referencia", "descricao", "mes"]
+    agg = m.groupby(grp_cols, as_index=False).agg(
         total_qtd=("quantidade", "sum"),
         total_valor=("custo_total", "sum"),
         data_recebimento=("data_recebimento", "max"),
-        pedido_ids=("pedido_id", lambda x: sorted(set(int(v) for v in x if pd.notna(v)))),
     )
+
+    pid_map = (
+        m.groupby(grp_cols, sort=False)["pedido_id"]
+        .apply(lambda x: sorted(set(int(v) for v in x if pd.notna(v))))
+        .reset_index(name="pedido_ids")
+    )
+    agg = agg.merge(pid_map, on=grp_cols, how="left")
+    agg["pedido_ids"] = agg["pedido_ids"].apply(lambda x: x if isinstance(x, list) else [])
+
     return agg
 
 
