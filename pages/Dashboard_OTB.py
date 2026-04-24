@@ -195,7 +195,14 @@ else:
         ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.year.isin(ano_sel)]
     if mes_sel:
         ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.month.isin(mes_sel)]
-    ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
+
+    ver_recebidos = st.checkbox(
+        "Incluir pedidos já **recebidos** (para corrigir recebimentos)",
+        value=False,
+        key="rcv_ver_recebidos",
+    )
+    if not ver_recebidos:
+        ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
     ped_show = ped_rcv.sort_values("id", ascending=False)
 
     if ped_show.empty:
@@ -503,6 +510,18 @@ for _col, _fallback in (
             .replace("", _fallback)
         )
 
+if "pedido_ids" not in _df_otb_tree.columns:
+    _df_otb_tree["pedido_ids"] = _df_otb_tree.get("pedido_ids", "").apply(
+        lambda x: x if isinstance(x, list) else []
+    )
+
+def _merge_pedido_ids(series):
+    ids = set()
+    for v in series:
+        if isinstance(v, list):
+            ids.update(v)
+    return sorted(ids)
+
 df_base = _df_otb_tree.groupby(
     ["grupo", "marca", "referencia"],
     as_index=False,
@@ -512,6 +531,7 @@ df_base = _df_otb_tree.groupby(
         "total_qtd": "sum",
         "total_valor": "sum",
         "data_recebimento": "max",
+        "pedido_ids": _merge_pedido_ids,
     }
 )
 
@@ -572,21 +592,26 @@ else:
                 m_label = f"🏷️ {marca} — {formatar_moeda_br(m_val)}  ({m_perc*100:.1f}%)"
 
                 with st.expander(m_label, expanded=False):
-                    df_refs = df_m[["referencia", "total_qtd", "total_valor", "perc", "data_recebimento"]].copy()
+                    df_refs = df_m[["referencia", "total_qtd", "total_valor", "perc", "data_recebimento", "pedido_ids"]].copy()
                     df_refs = df_refs.sort_values("referencia")
                     df_refs["data_recebimento"] = df_refs["data_recebimento"].apply(_fmt_data_recebimento_otb)
+                    df_refs["pedido_ids"] = df_refs["pedido_ids"].apply(
+                        lambda ids: ", ".join(f"#{i}" for i in ids) if isinstance(ids, list) and ids else ""
+                    )
                     df_refs = df_refs.rename(columns={
                         "referencia": "Referência",
                         "total_qtd": "Quantidade",
                         "total_valor": "Valor (R$)",
                         "perc": "% Part.",
                         "data_recebimento": "Data Receb.",
+                        "pedido_ids": "Pedido(s)",
                     })
                     st.dataframe(
                         df_refs,
                         use_container_width=True,
                         hide_index=True,
                         column_config={
+                            "Pedido(s)": st.column_config.TextColumn(width="small"),
                             "Referência": st.column_config.TextColumn(width="medium"),
                             "Quantidade": st.column_config.NumberColumn(format="%d", width="small"),
                             "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f", width="medium"),

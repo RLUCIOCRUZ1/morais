@@ -471,6 +471,7 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
         total_qtd=("quantidade", "sum"),
         total_valor=("custo_total", "sum"),
         data_recebimento=("data_recebimento", "max"),
+        pedido_ids=("pedido_id", lambda x: sorted(set(int(v) for v in x if pd.notna(v)))),
     )
     return agg
 
