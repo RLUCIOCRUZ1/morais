@@ -513,7 +513,9 @@ for _col, _fallback in (
         )
 
 if "pedido_ids" not in _df_otb_tree.columns:
-    _df_otb_tree["pedido_ids"] = _df_otb_tree.get("pedido_ids", "").apply(
+    _df_otb_tree["pedido_ids"] = [[] for _ in range(len(_df_otb_tree))]
+else:
+    _df_otb_tree["pedido_ids"] = _df_otb_tree["pedido_ids"].apply(
         lambda x: x if isinstance(x, list) else []
     )
 
