@@ -251,7 +251,7 @@ else:
                         "recebido": st.column_config.CheckboxColumn("Recebido"),
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"editor_itens_{pid_sel}",
                     num_rows="fixed",
                 )
@@ -612,7 +612,7 @@ else:
                     })
                     st.dataframe(
                         df_refs,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Pedido(s)": st.column_config.TextColumn(width="small"),
