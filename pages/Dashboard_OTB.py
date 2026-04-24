@@ -495,167 +495,51 @@ else:
     df_base["perc"] = df_base["total_valor"] / total_geral
 
 # =========================
-# 🧠 TRANSFORMA EM HIERARQUIA
+# 🧠 MONTA TABELA HIERÁRQUICA FLAT
 # =========================
-def build_tree(df):
-    data = []
-
-    for grupo, df_g in df.groupby("grupo", dropna=False):
-        node_g = {
-            "Grupo": str(grupo),
-            "Quantidade": float(df_g["total_qtd"].sum()),
-            "Valor": float(df_g["total_valor"].sum()),
-            "% Participação": float(df_g["total_valor"].sum() / total_geral) if total_geral else 0,
-            "Data_do_recebimento": _fmt_data_recebimento_otb(df_g["data_recebimento"].max()),
-            "children": [],
-        }
-
-        for marca, df_m in df_g.groupby("marca", dropna=False):
-            node_m = {
-                "Grupo": str(marca),
-                "Quantidade": float(df_m["total_qtd"].sum()),
-                "Valor": float(df_m["total_valor"].sum()),
-                "% Participação": float(df_m["total_valor"].sum() / total_geral) if total_geral else 0,
-                "Data_do_recebimento": _fmt_data_recebimento_otb(df_m["data_recebimento"].max()),
-                "children": [],
-            }
-
-            for _, r in df_m.iterrows():
-                node_m["children"].append(
-                    {
-                        "Grupo": str(r["referencia"]),
-                        "Quantidade": float(r["total_qtd"]),
-                        "Valor": float(r["total_valor"]),
-                        "% Participação": float(r["perc"]),
-                        "Data_do_recebimento": _fmt_data_recebimento_otb(r["data_recebimento"]),
-                    }
-                )
-
-            node_g["children"].append(node_m)
-
-        data.append(node_g)
-
-    return data
-
-tree_data = build_tree(df_base)
-
-# =========================
-# 🔥 CONVERTE PARA PATH STRING
-# =========================
-def flatten_tree(data, parent=None):
-    if parent is None:
-        parent = []
-
+def build_flat_hierarchy(df):
     rows = []
-
-    for item in data:
-        current_path = parent + [str(item["Grupo"])]
-        path_str = "||".join(current_path)
-
-        rows.append(
-            {
-                "path": path_str,
-                "Grupo": str(item["Grupo"]),
-                "Quantidade": float(item["Quantidade"]),
-                "Valor": float(item["Valor"]),
-                "Data_do_recebimento": item.get("Data_do_recebimento") or "",
-            }
-        )
-
-        if "children" in item:
-            rows.extend(flatten_tree(item["children"], current_path))
-
+    for grupo, df_g in sorted(df.groupby("grupo", dropna=False), key=lambda x: str(x[0])):
+        g_qtd = float(df_g["total_qtd"].sum())
+        g_val = float(df_g["total_valor"].sum())
+        g_perc = g_val / total_geral if total_geral else 0
+        g_data = _fmt_data_recebimento_otb(df_g["data_recebimento"].max())
+        rows.append({
+            "nivel": 0,
+            "Grupo / Marca / Referência": str(grupo),
+            "Quantidade": g_qtd,
+            "Valor": g_val,
+            "% Participação": g_perc,
+            "Data do recebimento": g_data,
+        })
+        for marca, df_m in sorted(df_g.groupby("marca", dropna=False), key=lambda x: str(x[0])):
+            m_qtd = float(df_m["total_qtd"].sum())
+            m_val = float(df_m["total_valor"].sum())
+            m_perc = m_val / total_geral if total_geral else 0
+            m_data = _fmt_data_recebimento_otb(df_m["data_recebimento"].max())
+            rows.append({
+                "nivel": 1,
+                "Grupo / Marca / Referência": f"    {marca}",
+                "Quantidade": m_qtd,
+                "Valor": m_val,
+                "% Participação": m_perc,
+                "Data do recebimento": m_data,
+            })
+            for _, r in df_m.sort_values("referencia").iterrows():
+                rows.append({
+                    "nivel": 2,
+                    "Grupo / Marca / Referência": f"        {r['referencia']}",
+                    "Quantidade": float(r["total_qtd"]),
+                    "Valor": float(r["total_valor"]),
+                    "% Participação": float(r["perc"]),
+                    "Data do recebimento": _fmt_data_recebimento_otb(r["data_recebimento"]),
+                })
     return rows
 
-df_tree = pd.DataFrame(flatten_tree(tree_data))
-if df_tree.empty:
-    df_tree = pd.DataFrame(
-        columns=["path", "Grupo", "Quantidade", "Valor", "Data_do_recebimento"]
-    )
-
-# =========================
-# 🎨 GRID CONFIG - DRILL
-# =========================
-gridOptions = {
-    "treeData": True,
-    "animateRows": True,
-    "groupDefaultExpanded": 0,
-
-    "getDataPath": JsCode("""
-        function(data) {
-            return String(data.path).split("||");
-        }
-    """),
-
-    "autoGroupColumnDef": {
-        "headerName": "Grupo / Marca / Referência",
-        "field": "Grupo",
-        "minWidth": 420,
-        "pinned": "left",
-        "cellStyle": {
-            "textAlign": "center"
-        },
-        "headerClass": "ag-center-header",
-        "cellRendererParams": {
-            "suppressCount": True
-        }
-    },
-
-    "columnDefs": [
-        {
-            "field": "Quantidade",
-            "headerName": "Quantidade",
-            "type": "numericColumn",
-            "cellStyle": {
-                "textAlign": "center"
-            },
-            "headerClass": "ag-center-header",
-            "valueFormatter": JsCode("""
-                function(params) {
-                    if (params.value == null) return '';
-                    return Number(params.value).toLocaleString('pt-BR');
-                }
-            """)
-        },
-        {
-            "field": "Valor",
-            "headerName": "Valor",
-            "type": "numericColumn",
-            "cellStyle": {
-                "textAlign": "center"
-            },
-            "headerClass": "ag-center-header",
-            "valueFormatter": JsCode("""
-                function(params) {
-                    if (params.value == null) return '';
-                    return Number(params.value).toLocaleString('pt-BR', {
-                        style: 'currency',
-                        currency: 'BRL'
-                    });
-                }
-            """)
-        },
-        {
-            "field": "Data_do_recebimento",
-            "headerName": "Data do recebimento",
-            "cellStyle": {"textAlign": "center"},
-            "headerClass": "ag-center-header",
-            "valueFormatter": JsCode("""
-                function(params) {
-                    if (params.value == null || params.value === '') return '';
-                    return String(params.value);
-                }
-            """),
-        },
-    ],
-
-    "defaultColDef": {
-        "resizable": True,
-        "sortable": True,
-        "filter": True,
-        "flex": 1
-    }
-}
+flat_rows = build_flat_hierarchy(df_base)
+df_tree = pd.DataFrame(flat_rows) if flat_rows else pd.DataFrame(
+    columns=["nivel", "Grupo / Marca / Referência", "Quantidade", "Valor", "% Participação", "Data do recebimento"]
+)
 
 
 st.markdown("""
@@ -684,77 +568,124 @@ else:
 # =========================
 # 🚀 AGGRID
 # =========================
-AgGrid(
-    df_tree,
-    gridOptions=gridOptions,
-    enable_enterprise_modules=True,
-    fit_columns_on_grid_load=False,
-    height=550,
-    allow_unsafe_jscode=True,
-    theme="balham"
-)
+if df_tree.empty:
+    st.info("Sem dados para exibir na hierarquia.")
+else:
+    _row_style_js = JsCode("""
+        function(params) {
+            if (params.data.nivel === 0) {
+                return { 'font-weight': 'bold', 'background-color': '#e8edf3' };
+            }
+            if (params.data.nivel === 1) {
+                return { 'font-weight': '600', 'background-color': '#f4f6f9' };
+            }
+            return {};
+        }
+    """)
+
+    gb = GridOptionsBuilder.from_dataframe(
+        df_tree.drop(columns=["nivel"])
+    )
+    gb.configure_column(
+        "Grupo / Marca / Referência",
+        minWidth=400,
+        pinned="left",
+        cellStyle={"whiteSpace": "pre"},
+    )
+    gb.configure_column(
+        "Quantidade",
+        type=["numericColumn"],
+        valueFormatter=JsCode("""
+            function(params) {
+                if (params.value == null) return '';
+                return Number(params.value).toLocaleString('pt-BR');
+            }
+        """),
+        cellStyle={"textAlign": "center"},
+        headerClass="ag-center-header",
+    )
+    gb.configure_column(
+        "Valor",
+        type=["numericColumn"],
+        valueFormatter=JsCode("""
+            function(params) {
+                if (params.value == null) return '';
+                return Number(params.value).toLocaleString('pt-BR', {
+                    style: 'currency', currency: 'BRL'
+                });
+            }
+        """),
+        cellStyle={"textAlign": "center"},
+        headerClass="ag-center-header",
+    )
+    gb.configure_column(
+        "% Participação",
+        type=["numericColumn"],
+        valueFormatter=JsCode("""
+            function(params) {
+                if (params.value == null) return '';
+                return (params.value * 100).toFixed(1) + '%';
+            }
+        """),
+        cellStyle={"textAlign": "center"},
+        headerClass="ag-center-header",
+    )
+    gb.configure_column(
+        "Data do recebimento",
+        cellStyle={"textAlign": "center"},
+        headerClass="ag-center-header",
+    )
+    gb.configure_default_column(resizable=True, sortable=False, filter=False, flex=1)
+
+    grid_opts = gb.build()
+    grid_opts["getRowStyle"] = _row_style_js
+
+    AgGrid(
+        df_tree,
+        gridOptions=grid_opts,
+        enable_enterprise_modules=False,
+        fit_columns_on_grid_load=False,
+        height=550,
+        allow_unsafe_jscode=True,
+        theme="balham",
+        columns_auto_size_mode=1,
+    )
 
 # =========================
 # 💾 EXPORTA EXCEL
 # =========================
-def exportar_excel_otb(df_tree):
-    import io
-    import pandas as pd
-
+def exportar_excel_otb(df_base_export):
     output = io.BytesIO()
 
-    df_export = df_tree.copy()
-    df_export["path"] = df_export["path"].fillna("").astype(str)
+    df_export = df_base_export.copy()
+    df_export = df_export.rename(columns={
+        "grupo": "Grupo",
+        "marca": "Marca",
+        "referencia": "Referência",
+        "total_qtd": "Quantidade",
+        "total_valor": "Valor",
+    })
+    if "data_recebimento" in df_export.columns:
+        df_export["Data do recebimento"] = df_export["data_recebimento"].apply(_fmt_data_recebimento_otb)
+    else:
+        df_export["Data do recebimento"] = ""
 
-    split_cols = (
-        df_export["path"]
-        .str.split("||", expand=True, regex=False)
-        .reindex(columns=range(3))
-    )
-
-    split_cols.columns = ["Grupo_export", "Marca", "Referencia"]
-
-    df_export = pd.concat([df_export, split_cols], axis=1)
-
-    df_export = df_export[df_export["Referencia"].notna()]
-
-    if "Data_do_recebimento" not in df_export.columns:
-        df_export["Data_do_recebimento"] = ""
-
-    df_export = df_export[
-        ["Grupo_export", "Marca", "Referencia", "Data_do_recebimento", "Quantidade", "Valor"]
-    ].rename(
-        columns={
-            "Grupo_export": "Grupo",
-            "Data_do_recebimento": "Data do recebimento",
-        }
-    )
+    cols = ["Grupo", "Marca", "Referência", "Data do recebimento", "Quantidade", "Valor"]
+    df_export = df_export[[c for c in cols if c in df_export.columns]]
 
     df_export["Quantidade"] = (
-        pd.to_numeric(df_export["Quantidade"], errors="coerce")
-        .fillna(0)
-        .astype(int)
+        pd.to_numeric(df_export["Quantidade"], errors="coerce").fillna(0).astype(int)
     )
-
     df_export["Valor"] = (
-        pd.to_numeric(df_export["Valor"], errors="coerce")
-        .fillna(0.0)
+        pd.to_numeric(df_export["Valor"], errors="coerce").fillna(0.0)
     )
-
-    df_export = df_export.sort_values(
-        ["Grupo", "Marca", "Referencia"]
-    )
+    df_export = df_export.sort_values(["Grupo", "Marca", "Referência"])
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df_export.to_excel(writer, index=False, sheet_name="OTB")
-
         workbook = writer.book
         worksheet = writer.sheets["OTB"]
-
-        formato_moeda = workbook.add_format({
-            "num_format": 'R$ #,##0.00'
-        })
-
+        formato_moeda = workbook.add_format({"num_format": 'R$ #,##0.00'})
         worksheet.set_column("A:C", 22)
         worksheet.set_column("D:D", 18)
         worksheet.set_column("E:E", 15)
@@ -762,7 +693,7 @@ def exportar_excel_otb(df_tree):
 
     return output.getvalue()
 
-excel_file = exportar_excel_otb(df_tree)
+excel_file = exportar_excel_otb(df_base)
 
 st.download_button(
     label="📥 Exportar Excel",
