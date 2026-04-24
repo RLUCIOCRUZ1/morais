@@ -542,14 +542,6 @@ df_tree = pd.DataFrame(flat_rows) if flat_rows else pd.DataFrame(
 )
 
 
-st.markdown("""
-<style>
-.ag-center-header .ag-header-cell-label {
-    justify-content: center !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
 st.subheader(
     "📑 OTB hierárquico (em aberto)"
     if not incluir_recebidos_otb
@@ -566,89 +558,28 @@ else:
     )
 
 # =========================
-# 🚀 AGGRID
+# 🚀 TABELA HIERÁRQUICA
 # =========================
 if df_tree.empty:
     st.info("Sem dados para exibir na hierarquia.")
 else:
-    _row_style_js = JsCode("""
-        function(params) {
-            if (params.data.nivel === 0) {
-                return { 'font-weight': 'bold', 'background-color': '#e8edf3' };
-            }
-            if (params.data.nivel === 1) {
-                return { 'font-weight': '600', 'background-color': '#f4f6f9' };
-            }
-            return {};
-        }
-    """)
+    df_show = df_tree.drop(columns=["nivel"]).copy()
+    df_show["% Participação"] = df_show["% Participação"].apply(lambda v: f"{v*100:.1f}%")
+    df_show["Quantidade"] = df_show["Quantidade"].apply(lambda v: f"{int(v):,}".replace(",", "."))
+    df_show["Valor"] = df_show["Valor"].apply(lambda v: formatar_moeda_br(v))
 
-    gb = GridOptionsBuilder.from_dataframe(
-        df_tree.drop(columns=["nivel"])
-    )
-    gb.configure_column(
-        "Grupo / Marca / Referência",
-        minWidth=400,
-        pinned="left",
-        cellStyle={"whiteSpace": "pre"},
-    )
-    gb.configure_column(
-        "Quantidade",
-        type=["numericColumn"],
-        valueFormatter=JsCode("""
-            function(params) {
-                if (params.value == null) return '';
-                return Number(params.value).toLocaleString('pt-BR');
-            }
-        """),
-        cellStyle={"textAlign": "center"},
-        headerClass="ag-center-header",
-    )
-    gb.configure_column(
-        "Valor",
-        type=["numericColumn"],
-        valueFormatter=JsCode("""
-            function(params) {
-                if (params.value == null) return '';
-                return Number(params.value).toLocaleString('pt-BR', {
-                    style: 'currency', currency: 'BRL'
-                });
-            }
-        """),
-        cellStyle={"textAlign": "center"},
-        headerClass="ag-center-header",
-    )
-    gb.configure_column(
-        "% Participação",
-        type=["numericColumn"],
-        valueFormatter=JsCode("""
-            function(params) {
-                if (params.value == null) return '';
-                return (params.value * 100).toFixed(1) + '%';
-            }
-        """),
-        cellStyle={"textAlign": "center"},
-        headerClass="ag-center-header",
-    )
-    gb.configure_column(
-        "Data do recebimento",
-        cellStyle={"textAlign": "center"},
-        headerClass="ag-center-header",
-    )
-    gb.configure_default_column(resizable=True, sortable=False, filter=False, flex=1)
-
-    grid_opts = gb.build()
-    grid_opts["getRowStyle"] = _row_style_js
-
-    AgGrid(
-        df_tree,
-        gridOptions=grid_opts,
-        enable_enterprise_modules=False,
-        fit_columns_on_grid_load=False,
+    st.dataframe(
+        df_show,
+        use_container_width=True,
         height=550,
-        allow_unsafe_jscode=True,
-        theme="balham",
-        columns_auto_size_mode=1,
+        hide_index=True,
+        column_config={
+            "Grupo / Marca / Referência": st.column_config.TextColumn(width="large"),
+            "Quantidade": st.column_config.TextColumn(width="small"),
+            "Valor": st.column_config.TextColumn(width="medium"),
+            "% Participação": st.column_config.TextColumn(width="small"),
+            "Data do recebimento": st.column_config.TextColumn(width="medium"),
+        },
     )
 
 # =========================
