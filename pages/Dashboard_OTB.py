@@ -643,7 +643,14 @@ def exportar_excel_otb(df_base_export):
     else:
         df_export["Data do recebimento"] = ""
 
-    cols = ["Grupo", "Marca", "Referência", "Data do recebimento", "Quantidade", "Valor"]
+    if "pedido_ids" in df_export.columns:
+        df_export["Pedido(s)"] = df_export["pedido_ids"].apply(
+            lambda ids: ", ".join(f"#{i}" for i in ids) if isinstance(ids, list) and ids else ""
+        )
+    else:
+        df_export["Pedido(s)"] = ""
+
+    cols = ["Pedido(s)", "Grupo", "Marca", "Referência", "Data do recebimento", "Quantidade", "Valor"]
     df_export = df_export[[c for c in cols if c in df_export.columns]]
 
     df_export["Quantidade"] = (
@@ -659,10 +666,11 @@ def exportar_excel_otb(df_base_export):
         workbook = writer.book
         worksheet = writer.sheets["OTB"]
         formato_moeda = workbook.add_format({"num_format": 'R$ #,##0.00'})
-        worksheet.set_column("A:C", 22)
-        worksheet.set_column("D:D", 18)
-        worksheet.set_column("E:E", 15)
-        worksheet.set_column("F:F", 18, formato_moeda)
+        worksheet.set_column("A:A", 14)
+        worksheet.set_column("B:D", 22)
+        worksheet.set_column("E:E", 18)
+        worksheet.set_column("F:F", 15)
+        worksheet.set_column("G:G", 18, formato_moeda)
 
     return output.getvalue()
 
