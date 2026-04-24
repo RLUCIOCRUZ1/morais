@@ -494,54 +494,6 @@ if total_geral == 0:
 else:
     df_base["perc"] = df_base["total_valor"] / total_geral
 
-# =========================
-# 🧠 MONTA TABELA HIERÁRQUICA FLAT
-# =========================
-def build_flat_hierarchy(df):
-    rows = []
-    for grupo, df_g in sorted(df.groupby("grupo", dropna=False), key=lambda x: str(x[0])):
-        g_qtd = float(df_g["total_qtd"].sum())
-        g_val = float(df_g["total_valor"].sum())
-        g_perc = g_val / total_geral if total_geral else 0
-        g_data = _fmt_data_recebimento_otb(df_g["data_recebimento"].max())
-        rows.append({
-            "nivel": 0,
-            "Grupo / Marca / Referência": str(grupo),
-            "Quantidade": g_qtd,
-            "Valor": g_val,
-            "% Participação": g_perc,
-            "Data do recebimento": g_data,
-        })
-        for marca, df_m in sorted(df_g.groupby("marca", dropna=False), key=lambda x: str(x[0])):
-            m_qtd = float(df_m["total_qtd"].sum())
-            m_val = float(df_m["total_valor"].sum())
-            m_perc = m_val / total_geral if total_geral else 0
-            m_data = _fmt_data_recebimento_otb(df_m["data_recebimento"].max())
-            rows.append({
-                "nivel": 1,
-                "Grupo / Marca / Referência": f"    {marca}",
-                "Quantidade": m_qtd,
-                "Valor": m_val,
-                "% Participação": m_perc,
-                "Data do recebimento": m_data,
-            })
-            for _, r in df_m.sort_values("referencia").iterrows():
-                rows.append({
-                    "nivel": 2,
-                    "Grupo / Marca / Referência": f"        {r['referencia']}",
-                    "Quantidade": float(r["total_qtd"]),
-                    "Valor": float(r["total_valor"]),
-                    "% Participação": float(r["perc"]),
-                    "Data do recebimento": _fmt_data_recebimento_otb(r["data_recebimento"]),
-                })
-    return rows
-
-flat_rows = build_flat_hierarchy(df_base)
-df_tree = pd.DataFrame(flat_rows) if flat_rows else pd.DataFrame(
-    columns=["nivel", "Grupo / Marca / Referência", "Quantidade", "Valor", "% Participação", "Data do recebimento"]
-)
-
-
 st.subheader(
     "📑 OTB hierárquico (em aberto)"
     if not incluir_recebidos_otb
@@ -558,29 +510,62 @@ else:
     )
 
 # =========================
-# 🚀 TABELA HIERÁRQUICA
+# 🚀 DRILL-DOWN HIERÁRQUICO
 # =========================
-if df_tree.empty:
+if df_base.empty:
     st.info("Sem dados para exibir na hierarquia.")
 else:
-    df_show = df_tree.drop(columns=["nivel"]).copy()
-    df_show["% Participação"] = df_show["% Participação"].apply(lambda v: f"{v*100:.1f}%")
-    df_show["Quantidade"] = df_show["Quantidade"].apply(lambda v: f"{int(v):,}".replace(",", "."))
-    df_show["Valor"] = df_show["Valor"].apply(lambda v: formatar_moeda_br(v))
+    def _metric_line(qtd, valor, perc, data_rec=""):
+        parts = [
+            f"**Qtd:** {int(qtd):,}".replace(",", "."),
+            f"**Valor:** {formatar_moeda_br(valor)}",
+            f"**Part.:** {perc*100:.1f}%",
+        ]
+        if data_rec:
+            parts.append(f"**Receb.:** {data_rec}")
+        return " &nbsp;|&nbsp; ".join(parts)
 
-    st.dataframe(
-        df_show,
-        use_container_width=True,
-        height=550,
-        hide_index=True,
-        column_config={
-            "Grupo / Marca / Referência": st.column_config.TextColumn(width="large"),
-            "Quantidade": st.column_config.TextColumn(width="small"),
-            "Valor": st.column_config.TextColumn(width="medium"),
-            "% Participação": st.column_config.TextColumn(width="small"),
-            "Data do recebimento": st.column_config.TextColumn(width="medium"),
-        },
-    )
+    for grupo, df_g in sorted(df_base.groupby("grupo", dropna=False), key=lambda x: str(x[0])):
+        g_qtd = df_g["total_qtd"].sum()
+        g_val = df_g["total_valor"].sum()
+        g_perc = g_val / total_geral if total_geral else 0
+        g_data = _fmt_data_recebimento_otb(df_g["data_recebimento"].max())
+        g_label = f"**{grupo}** — {formatar_moeda_br(g_val)}  ({g_perc*100:.1f}%)"
+
+        with st.expander(g_label, expanded=False):
+            st.markdown(_metric_line(g_qtd, g_val, g_perc, g_data))
+            st.divider()
+
+            for marca, df_m in sorted(df_g.groupby("marca", dropna=False), key=lambda x: str(x[0])):
+                m_qtd = df_m["total_qtd"].sum()
+                m_val = df_m["total_valor"].sum()
+                m_perc = m_val / total_geral if total_geral else 0
+                m_data = _fmt_data_recebimento_otb(df_m["data_recebimento"].max())
+                m_label = f"🏷️ {marca} — {formatar_moeda_br(m_val)}  ({m_perc*100:.1f}%)"
+
+                with st.expander(m_label, expanded=False):
+                    df_refs = df_m[["referencia", "total_qtd", "total_valor", "perc", "data_recebimento"]].copy()
+                    df_refs = df_refs.sort_values("referencia")
+                    df_refs["data_recebimento"] = df_refs["data_recebimento"].apply(_fmt_data_recebimento_otb)
+                    df_refs = df_refs.rename(columns={
+                        "referencia": "Referência",
+                        "total_qtd": "Quantidade",
+                        "total_valor": "Valor (R$)",
+                        "perc": "% Part.",
+                        "data_recebimento": "Data Receb.",
+                    })
+                    st.dataframe(
+                        df_refs,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Referência": st.column_config.TextColumn(width="medium"),
+                            "Quantidade": st.column_config.NumberColumn(format="%d", width="small"),
+                            "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f", width="medium"),
+                            "% Part.": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                            "Data Receb.": st.column_config.TextColumn(width="medium"),
+                        },
+                    )
 
 # =========================
 # 💾 EXPORTA EXCEL
