@@ -197,11 +197,13 @@ else:
         ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.month.isin(mes_sel)]
 
     ver_recebidos = st.checkbox(
-        "Incluir pedidos já **recebidos** (para corrigir recebimentos)",
+        "Mostrar pedidos recebidos",
         value=False,
         key="rcv_ver_recebidos",
     )
-    if not ver_recebidos:
+    if ver_recebidos:
+        ped_rcv = ped_rcv.loc[ped_rcv["recebido"]]
+    else:
         ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
     ped_show = ped_rcv.sort_values("id", ascending=False)
 
