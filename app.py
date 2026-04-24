@@ -62,17 +62,65 @@ if n_usuarios == 0:
 # --- Login ---
 if not is_logged_in():
     show_sidebar_branding()
-    st.markdown("### Entrar")
-    with st.form("login_form"):
-        lg_email = st.text_input("E-mail")
-        lg_senha = st.text_input("Senha", type="password")
-        ok = st.form_submit_button("Entrar", type="primary", width="stretch")
-        if ok:
-            success, err = login_por_email_senha(lg_email, lg_senha)
-            if success:
-                st.rerun()
+
+    if "show_reset" not in st.session_state:
+        st.session_state.show_reset = False
+
+    # ---------- Fluxo normal de login ----------
+    if not st.session_state.show_reset:
+        st.markdown("### Entrar")
+        with st.form("login_form"):
+            lg_email = st.text_input("E-mail")
+            lg_senha = st.text_input("Senha", type="password")
+            ok = st.form_submit_button("Entrar", type="primary", width="stretch")
+            if ok:
+                success, err = login_por_email_senha(lg_email, lg_senha)
+                if success:
+                    st.rerun()
+                else:
+                    st.error(err or "Falha no login.")
+
+        if st.button("Esqueci minha senha", type="tertiary"):
+            st.session_state.show_reset = True
+            st.rerun()
+
+    # ---------- Redefinir senha (somente admin) ----------
+    else:
+        st.markdown("### Redefinir senha")
+        st.info(
+            "Disponível apenas para perfil **Administrativo**. "
+            "Usuários de Cadastro devem pedir a um administrador para redefinir sua senha."
+        )
+        with st.form("reset_form"):
+            rs_email = st.text_input("E-mail cadastrado")
+            rs_nova = st.text_input("Nova senha", type="password")
+            rs_nova2 = st.text_input("Repita a nova senha", type="password")
+            col_reset, col_voltar = st.columns(2)
+            confirmar = col_reset.form_submit_button("Redefinir senha", type="primary")
+            voltar = col_voltar.form_submit_button("Voltar ao login")
+
+        if voltar:
+            st.session_state.show_reset = False
+            st.rerun()
+
+        if confirmar:
+            if not rs_email or not rs_email.strip():
+                st.error("Informe o e-mail.")
+            elif not rs_nova or len(rs_nova.strip()) < 6:
+                st.error("A nova senha deve ter pelo menos 6 caracteres.")
+            elif rs_nova != rs_nova2:
+                st.error("As senhas não coincidem.")
             else:
-                st.error(err or "Falha no login.")
+                try:
+                    ua.redefinir_senha_admin(rs_email.strip(), rs_nova.strip())
+                    st.session_state.show_reset = False
+                    st.success("Senha redefinida com sucesso! Faça login com a nova senha.")
+                    st.rerun()
+                except ValueError as ve:
+                    st.error(str(ve))
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+
     st.stop()
 
 # --- Home autenticada ---

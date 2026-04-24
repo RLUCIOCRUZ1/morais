@@ -146,6 +146,21 @@ def criar_usuario(
     return data[0]
 
 
+def redefinir_senha_admin(email: str, nova_senha: str) -> None:
+    """Redefine a senha diretamente — permitido apenas para perfil admin."""
+    user = buscar_por_email(email)
+    if not user:
+        raise ValueError("E-mail não encontrado.")
+    if not user.get("ativo", True):
+        raise ValueError("Usuário inativo.")
+    if user.get("perfil") != "admin":
+        raise ValueError("Apenas usuários administrativos podem redefinir a senha por aqui.")
+    s = (nova_senha or "").strip()
+    if len(s) < 6:
+        raise ValueError("A senha deve ter pelo menos 6 caracteres.")
+    atualizar_usuario(user["id"], nova_senha_plana=s)
+
+
 def atualizar_usuario(
     uid: str,
     *,
