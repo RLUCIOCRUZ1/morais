@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 from services.supabase_client import (
+    atualizar_item_recebimento,
     atualizar_pedido_recebimento,
     buscar_pedido_ids_por_descricao,
     data_baixa_hoje_iso,
     fetch_otb_pipeline,
+    listar_itens_pedido,
     listar_pedidos_resumo,
+    sincronizar_recebimento_pedido,
 )
 from services.branding import show_sidebar_branding
 import plotly.express as px
@@ -154,7 +157,7 @@ else:
     )
 
 # =========================
-# CONTROLE DE RECEBIMENTO (PEDIDOS)
+# CONTROLE DE RECEBIMENTO (PARCIAL POR ITEM)
 # =========================
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_pedidos_recebimento():
@@ -163,9 +166,9 @@ def carregar_pedidos_recebimento():
 
 st.subheader("📬 Controle de recebimento")
 st.caption(
-    "Só aparecem pedidos **pendentes de recebimento**. Ao marcar **Recebido** e salvar, gravamos automaticamente "
-    "a **data de hoje** (fuso Brasil) e o pedido some desta lista e do OTB “em aberto”. "
-    "Todos os filtros acima limitam a lista."
+    "Expanda cada pedido para ver suas **referências**. "
+    "Marque individualmente quais itens foram recebidos. "
+    "Quando todos os itens de um pedido forem marcados, ele será automaticamente fechado como **Recebido**."
 )
 
 ped_rcv = carregar_pedidos_recebimento()
@@ -194,66 +197,86 @@ else:
     if mes_sel:
         ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.month.isin(mes_sel)]
     ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
-    ped_show = ped_rcv.sort_values("id", ascending=False)[
-        [
-            "id",
-            "fornecedor",
-            "grupo",
-            "marca",
-            "data_chegada",
-            "total_valor",
-            "recebido",
-        ]
-    ].copy()
+    ped_show = ped_rcv.sort_values("id", ascending=False)
 
     if ped_show.empty:
         st.info("Nenhum pedido pendente de recebimento no filtro atual.")
     else:
+        for _, ped in ped_show.iterrows():
+            pid = int(ped["id"])
+            dc = pd.to_datetime(ped["data_chegada"], errors="coerce")
+            dc_str = dc.strftime("%d/%m/%Y") if pd.notna(dc) else "—"
+            label = (
+                f"Pedido #{pid} | "
+                f"{ped.get('fornecedor', '')} | "
+                f"{ped.get('grupo', '')} / {ped.get('marca', '')} | "
+                f"Chegada: {dc_str} | {formatar_moeda_br(ped.get('total_valor', 0))}"
+            )
 
-        edited_rcv = st.data_editor(
-            ped_show,
-            column_config={
-                "id": st.column_config.NumberColumn("ID pedido", disabled=True, format="%d"),
-                "fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
-                "grupo": st.column_config.TextColumn("Grupo", disabled=True),
-                "marca": st.column_config.TextColumn("Marca", disabled=True),
-                "data_chegada": st.column_config.DateColumn(
-                    "Previsão chegada", disabled=True, format="DD/MM/YYYY"
-                ),
-                "total_valor": st.column_config.NumberColumn("Total (R$)", disabled=True, format="%.2f"),
-                "recebido": st.column_config.CheckboxColumn("Recebido"),
-            },
-            hide_index=True,
-            width="stretch",
-            key="editor_recebimento_otb",
-            num_rows="fixed",
-        )
+            with st.expander(label, expanded=False):
+                itens = listar_itens_pedido(pid)
+                if not itens:
+                    st.info("Nenhum item encontrado para este pedido.")
+                    continue
 
-        if st.button("💾 Salvar recebimentos", key="salvar_receb_otb"):
-            try:
-                alteradas = 0
-                for _, r in edited_rcv.iterrows():
-                    orig = ped_show.loc[ped_show["id"] == r["id"]].iloc[0]
-                    rec_ant = bool(orig["recebido"])
-                    rec_novo = bool(r["recebido"])
-                    if rec_ant == rec_novo:
-                        continue
-                    dr = data_baixa_hoje_iso() if rec_novo else None
-                    atualizar_pedido_recebimento(int(r["id"]), rec_novo, data_recebimento=dr)
-                    alteradas += 1
+                df_itens = pd.DataFrame(itens)
+                df_itens["recebido"] = df_itens["recebido"].fillna(False).astype(bool)
 
-                carregar_pedidos_recebimento.clear()
-                carregar_otb.clear()
-                if alteradas:
-                    st.success(
-                        f"Atualizado: {alteradas} registro(s). "
-                        "**Data de recebimento** gravada como a **data de hoje** (Brasil)."
-                    )
-                else:
-                    st.info("Nenhuma alteração.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao salvar: {e}")
+                n_total = len(df_itens)
+                n_recebidos = int(df_itens["recebido"].sum())
+                st.caption(f"**{n_recebidos}** de **{n_total}** itens recebidos")
+
+                edited = st.data_editor(
+                    df_itens[["id", "referencia", "descricao", "quantidade", "custo_total", "recebido"]].copy(),
+                    column_config={
+                        "id": st.column_config.NumberColumn("ID", disabled=True, format="%d", width="small"),
+                        "referencia": st.column_config.TextColumn("Referência", disabled=True),
+                        "descricao": st.column_config.TextColumn("Descrição", disabled=True),
+                        "quantidade": st.column_config.NumberColumn("Qtd", disabled=True, format="%d", width="small"),
+                        "custo_total": st.column_config.NumberColumn("Valor (R$)", disabled=True, format="%.2f"),
+                        "recebido": st.column_config.CheckboxColumn("Recebido"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"editor_itens_{pid}",
+                    num_rows="fixed",
+                )
+
+                col_salvar, col_todos = st.columns(2)
+                if col_salvar.button("💾 Salvar", key=f"salvar_itens_{pid}"):
+                    try:
+                        alteradas = 0
+                        for _, row in edited.iterrows():
+                            orig = df_itens.loc[df_itens["id"] == row["id"]].iloc[0]
+                            if bool(orig["recebido"]) == bool(row["recebido"]):
+                                continue
+                            dr = data_baixa_hoje_iso() if row["recebido"] else None
+                            atualizar_item_recebimento(int(row["id"]), bool(row["recebido"]), dr)
+                            alteradas += 1
+                        if alteradas:
+                            sincronizar_recebimento_pedido(pid)
+                            carregar_pedidos_recebimento.clear()
+                            carregar_otb.clear()
+                            st.success(f"{alteradas} item(ns) atualizado(s).")
+                        else:
+                            st.info("Nenhuma alteração.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+
+                if col_todos.button("✅ Marcar todos como recebidos", key=f"todos_itens_{pid}"):
+                    try:
+                        hoje = data_baixa_hoje_iso()
+                        for item in itens:
+                            if not item.get("recebido", False):
+                                atualizar_item_recebimento(int(item["id"]), True, hoje)
+                        sincronizar_recebimento_pedido(pid)
+                        carregar_pedidos_recebimento.clear()
+                        carregar_otb.clear()
+                        st.success("Todos os itens marcados como recebidos.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
 # =========================
 # 📊 KPIs

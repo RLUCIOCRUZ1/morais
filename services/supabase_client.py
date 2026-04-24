@@ -214,6 +214,60 @@ def atualizar_pedido_recebimento(pedido_id, recebido, data_recebimento=None):
     return response.data
 
 
+def listar_itens_pedido(pedido_id):
+    """Retorna itens de um pedido com status de recebimento (graceful se colunas não existirem)."""
+    consultas = (
+        "id, pedido_id, referencia, descricao, quantidade, custo_total, recebido, data_recebimento",
+        "id, pedido_id, referencia, descricao, quantidade, custo_total",
+    )
+    for cols in consultas:
+        try:
+            resp = (
+                supabase.table("pedido_itens")
+                .select(cols)
+                .eq("pedido_id", pedido_id)
+                .order("id")
+                .execute()
+            )
+            data = resp.data or []
+            for r in data:
+                r.setdefault("recebido", False)
+                r.setdefault("data_recebimento", None)
+            return data
+        except Exception:
+            continue
+    return []
+
+
+def atualizar_item_recebimento(item_id, recebido, data_recebimento=None):
+    """Marca um item individual como recebido/não recebido."""
+    dados = {"recebido": bool(recebido)}
+    if recebido:
+        dados["data_recebimento"] = data_recebimento or data_baixa_hoje_iso()
+    else:
+        dados["data_recebimento"] = None
+    supabase.table("pedido_itens").update(dados).eq("id", item_id).execute()
+
+
+def sincronizar_recebimento_pedido(pedido_id):
+    """Se todos os itens estão recebidos, marca o pedido como recebido.
+
+    Se ao menos um item está pendente, marca o pedido como não recebido.
+    Retorna True se o pedido ficou 100% recebido.
+    """
+    itens = listar_itens_pedido(pedido_id)
+    if not itens:
+        return False
+    todos_recebidos = all(r.get("recebido", False) for r in itens)
+    if todos_recebidos:
+        datas = [r["data_recebimento"] for r in itens if r.get("data_recebimento")]
+        data_max = max(datas) if datas else data_baixa_hoje_iso()
+        atualizar_pedido_recebimento(pedido_id, True, data_recebimento=data_max)
+    else:
+        atualizar_pedido_recebimento(pedido_id, False)
+    return todos_recebidos
+
+
 def buscar_pedido_ids_por_descricao(descricoes: list) -> set:
     """Retorna IDs de pedidos que possuem itens com as descrições informadas."""
     if not descricoes:
@@ -307,21 +361,24 @@ def _coerce_recebido_bool(series):
 def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
     """Monta o OTB a partir de itens + pedidos.
 
-    - ``somente_nao_recebidos=True`` (padrão): igual ao fluxo "em aberto".
-    - ``False``: inclui também pedidos já recebidos (para ver todos os grupos no OTB).
-
-    O mês vem da **data_chegada**; sem data usa o 1º dia do mês atual (Brasil).
+    Usa recebimento **por item** quando as colunas existem em ``pedido_itens``;
+    caso contrário, faz fallback para o recebimento por pedido.
     """
     import pandas as pd
 
-    try:
-        items = _fetch_table_all_pages(
-            "pedido_itens", "pedido_id, referencia, descricao, quantidade, custo_total"
-        )
-    except Exception:
-        items = _fetch_table_all_pages(
-            "pedido_itens", "pedido_id, referencia, quantidade, custo_total"
-        )
+    item_cols_tentativas = (
+        "pedido_id, referencia, descricao, quantidade, custo_total, recebido, data_recebimento",
+        "pedido_id, referencia, descricao, quantidade, custo_total",
+        "pedido_id, referencia, quantidade, custo_total",
+    )
+    items = []
+    for cols_try in item_cols_tentativas:
+        try:
+            items = _fetch_table_all_pages("pedido_itens", cols_try)
+            break
+        except Exception:
+            continue
+
     cols = ["grupo", "marca", "referencia", "descricao", "mes", "total_qtd", "total_valor", "data_recebimento"]
     if not items:
         return pd.DataFrame(columns=cols)
@@ -354,29 +411,45 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
     df_i = df_i.dropna(subset=["pedido_id"])
     df_p = df_p.dropna(subset=["id"])
 
+    tem_receb_item = "recebido" in df_i.columns
+
+    if tem_receb_item:
+        df_i["recebido"] = _coerce_recebido_bool(df_i["recebido"])
+        if "data_recebimento" not in df_i.columns:
+            df_i["data_recebimento"] = pd.NaT
+        else:
+            df_i["data_recebimento"] = pd.to_datetime(df_i["data_recebimento"], errors="coerce")
+
     if "recebido" not in df_p.columns:
-        df_p["recebido"] = False
+        df_p["recebido_ped"] = False
     else:
-        df_p["recebido"] = _coerce_recebido_bool(df_p["recebido"])
-
+        df_p["recebido_ped"] = _coerce_recebido_bool(df_p["recebido"])
     if "data_recebimento" not in df_p.columns:
-        df_p["data_recebimento"] = pd.NaT
+        df_p["data_recebimento_ped"] = pd.NaT
     else:
-        df_p["data_recebimento"] = pd.to_datetime(df_p["data_recebimento"], errors="coerce")
+        df_p["data_recebimento_ped"] = pd.to_datetime(df_p["data_recebimento"], errors="coerce")
 
-    m = df_i.merge(df_p, left_on="pedido_id", right_on="id", how="inner", suffixes=("", "_ped"))
+    df_p_merge = df_p[["id", "grupo", "marca", "data_chegada", "recebido_ped", "data_recebimento_ped"]]
+    m = df_i.merge(df_p_merge, left_on="pedido_id", right_on="id", how="inner", suffixes=("", "_ped"))
     if m.empty:
         return pd.DataFrame(columns=cols)
 
-    # Recebido no banco mas sem data (cadastros antigos): exibir como hoje no OTB
-    fill_mask = m["recebido"] & m["data_recebimento"].isna()
-    if fill_mask.any():
-        m.loc[fill_mask, "data_recebimento"] = pd.to_datetime(data_baixa_hoje_iso())
+    if tem_receb_item:
+        fill_mask = m["recebido"] & m["data_recebimento"].isna()
+        if fill_mask.any():
+            m.loc[fill_mask, "data_recebimento"] = pd.to_datetime(data_baixa_hoje_iso())
+        if somente_nao_recebidos:
+            m = m.loc[~m["recebido"]]
+    else:
+        m["data_recebimento"] = m["data_recebimento_ped"]
+        fill_mask = m["recebido_ped"] & m["data_recebimento"].isna()
+        if fill_mask.any():
+            m.loc[fill_mask, "data_recebimento"] = pd.to_datetime(data_baixa_hoje_iso())
+        if somente_nao_recebidos:
+            m = m.loc[~m["recebido_ped"]]
 
-    if somente_nao_recebidos:
-        m = m.loc[~m["recebido"]]
-        if m.empty:
-            return pd.DataFrame(columns=cols)
+    if m.empty:
+        return pd.DataFrame(columns=cols)
 
     m["data_chegada"] = pd.to_datetime(m["data_chegada"], errors="coerce")
     try:
