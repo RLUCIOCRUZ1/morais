@@ -166,9 +166,8 @@ def carregar_pedidos_recebimento():
 
 st.subheader("📬 Controle de recebimento")
 st.caption(
-    "Expanda cada pedido para ver suas **referências**. "
-    "Marque individualmente quais itens foram recebidos. "
-    "Quando todos os itens de um pedido forem marcados, ele será automaticamente fechado como **Recebido**."
+    "Selecione um pedido para ver seus itens e marcar quais foram recebidos. "
+    "Quando todos os itens forem marcados, o pedido fecha automaticamente."
 )
 
 ped_rcv = carregar_pedidos_recebimento()
@@ -202,29 +201,35 @@ else:
     if ped_show.empty:
         st.info("Nenhum pedido pendente de recebimento no filtro atual.")
     else:
-        for _, ped in ped_show.iterrows():
-            pid = int(ped["id"])
-            dc = pd.to_datetime(ped["data_chegada"], errors="coerce")
+        opcoes = {}
+        for _, p in ped_show.iterrows():
+            dc = pd.to_datetime(p["data_chegada"], errors="coerce")
             dc_str = dc.strftime("%d/%m/%Y") if pd.notna(dc) else "—"
-            label = (
-                f"Pedido #{pid} | "
-                f"{ped.get('fornecedor', '')} | "
-                f"{ped.get('grupo', '')} / {ped.get('marca', '')} | "
-                f"Chegada: {dc_str} | {formatar_moeda_br(ped.get('total_valor', 0))}"
+            opcoes[int(p["id"])] = (
+                f"#{int(p['id'])} — {p.get('fornecedor','')} | "
+                f"{p.get('grupo','')} / {p.get('marca','')} | "
+                f"Chegada: {dc_str} | {formatar_moeda_br(p.get('total_valor', 0))}"
             )
 
-            with st.expander(label, expanded=False):
-                itens = listar_itens_pedido(pid)
-                if not itens:
-                    st.info("Nenhum item encontrado para este pedido.")
-                    continue
+        pid_sel = st.selectbox(
+            "Pedido",
+            options=list(opcoes.keys()),
+            format_func=lambda x: opcoes[x],
+            key="sel_pedido_receb",
+        )
 
+        if pid_sel:
+            itens = listar_itens_pedido(pid_sel)
+            if not itens:
+                st.info("Nenhum item encontrado para este pedido.")
+            else:
                 df_itens = pd.DataFrame(itens)
                 df_itens["recebido"] = df_itens["recebido"].fillna(False).astype(bool)
 
                 n_total = len(df_itens)
                 n_recebidos = int(df_itens["recebido"].sum())
-                st.caption(f"**{n_recebidos}** de **{n_total}** itens recebidos")
+                if n_recebidos > 0:
+                    st.caption(f"**{n_recebidos}** de **{n_total}** itens já recebidos")
 
                 edited = st.data_editor(
                     df_itens[["id", "referencia", "descricao", "quantidade", "custo_total", "recebido"]].copy(),
@@ -238,12 +243,12 @@ else:
                     },
                     hide_index=True,
                     use_container_width=True,
-                    key=f"editor_itens_{pid}",
+                    key=f"editor_itens_{pid_sel}",
                     num_rows="fixed",
                 )
 
                 col_salvar, col_todos = st.columns(2)
-                if col_salvar.button("💾 Salvar", key=f"salvar_itens_{pid}"):
+                if col_salvar.button("💾 Salvar recebimento", key="salvar_itens_rcv"):
                     try:
                         alteradas = 0
                         for _, row in edited.iterrows():
@@ -254,7 +259,7 @@ else:
                             atualizar_item_recebimento(int(row["id"]), bool(row["recebido"]), dr)
                             alteradas += 1
                         if alteradas:
-                            sincronizar_recebimento_pedido(pid)
+                            sincronizar_recebimento_pedido(pid_sel)
                             carregar_pedidos_recebimento.clear()
                             carregar_otb.clear()
                             st.success(f"{alteradas} item(ns) atualizado(s).")
@@ -264,13 +269,13 @@ else:
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
 
-                if col_todos.button("✅ Marcar todos como recebidos", key=f"todos_itens_{pid}"):
+                if col_todos.button("✅ Receber todos os itens", key="todos_itens_rcv"):
                     try:
                         hoje = data_baixa_hoje_iso()
                         for item in itens:
                             if not item.get("recebido", False):
                                 atualizar_item_recebimento(int(item["id"]), True, hoje)
-                        sincronizar_recebimento_pedido(pid)
+                        sincronizar_recebimento_pedido(pid_sel)
                         carregar_pedidos_recebimento.clear()
                         carregar_otb.clear()
                         st.success("Todos os itens marcados como recebidos.")
