@@ -199,6 +199,14 @@ df = df_parcelas.merge(
     how="left",
 )
 
+# Normaliza textos para evitar duplicidades visuais por espaços extras no legado.
+def _norm_txt(v):
+    return " ".join(str(v or "").split())
+
+for _c in ("grupo", "marca", "fornecedor"):
+    if _c in df.columns:
+        df[_c] = df[_c].map(_norm_txt)
+
 if "data_quitacao" not in df.columns:
     df["data_quitacao"] = pd.NaT
 else:
@@ -214,7 +222,12 @@ col1, col2, col3, col4, col5 = st.columns(5)
 grupo_sel = col1.multiselect("Grupo", sorted(df["grupo"].dropna().unique()))
 marca_sel = col2.multiselect("Marca", sorted(df["marca"].dropna().unique()))
 fornecedor_sel = col3.multiselect("Fornecedor", sorted(df["fornecedor"].dropna().unique()))
-ano_sel = col4.multiselect("Ano", sorted(df["data_pagamento"].dt.year.dropna().unique()))
+anos_disponiveis = sorted(int(a) for a in df["data_pagamento"].dt.year.dropna().unique())
+ano_atual = pd.Timestamp.now().year
+anos_default = [a for a in anos_disponiveis if a >= ano_atual]
+if not anos_default and anos_disponiveis:
+    anos_default = [max(anos_disponiveis)]
+ano_sel = col4.multiselect("Ano", anos_disponiveis, default=anos_default)
 meses_opts = sorted({int(m) for m in df["data_pagamento"].dt.month.dropna().unique()})
 mes_sel = col5.multiselect(
     "Mês",
@@ -403,198 +416,12 @@ if not df_marca_share.empty:
     _layout_plotly_base(fig_pie, altura=420)
     st.plotly_chart(fig_pie, width="stretch")
 
-# --- Pagamento efetivo (baixa) ---
-st.divider()
-_secao_fin_header(
-    "2 · Visão por data de pagamento (efetivo)",
-    "Somente parcelas **já quitadas**, pela data em que foram baixadas (saída real de caixa). "
-    "O intervalo **De/Até** é pela data de baixa; **grupo, marca, fornecedor** e **Ano/Mês** "
-    "(vencimento) do topo também filtram as linhas. Cor verde nesta seção.",
-    COR_PAGAMENTO,
-    "rgba(236, 253, 245, 0.92)",
-)
-
-hoje_br = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
-def_ini, def_fim = _primeiro_ultimo_dia_mes(hoje_br)
-if "fin_evol_d_ini" not in st.session_state:
-    st.session_state.fin_evol_d_ini = def_ini
-    st.session_state.fin_evol_d_fim = def_fim
-if "fin_evol_atalho" not in st.session_state:
-    st.session_state.fin_evol_atalho = "Mês atual"
-
-st.selectbox(
-    "Atalho — período pela data de baixa",
-    options=ATALHOS_PERIODO_BAIXA_FIN,
-    key="fin_evol_atalho",
-    on_change=_aplicar_atalho_baixa_fin_callback,
-    help="Somente parcelas quitadas; filtra pela data da baixa (data_quitacao).",
-)
-dc1, dc2 = st.columns(2)
-with dc1:
-    d_ini = st.date_input(
-        "De (data de baixa)",
-        key="fin_evol_d_ini",
-        format="DD/MM/YYYY",
-        on_change=_marcar_periodo_baixa_personalizado_callback,
-    )
-with dc2:
-    d_fim = st.date_input(
-        "Até (data de baixa)",
-        key="fin_evol_d_fim",
-        format="DD/MM/YYYY",
-        on_change=_marcar_periodo_baixa_personalizado_callback,
-    )
-if d_ini > d_fim:
-    d_ini, d_fim = d_fim, d_ini
-
-df_efet = df_filtrado[df_filtrado["pago"] == True].copy()
-df_efet["data_baixa"] = pd.to_datetime(df_efet["data_quitacao"], errors="coerce")
-df_efet = df_efet.dropna(subset=["data_baixa"])
-dnorm = df_efet["data_baixa"].dt.normalize().dt.date
-df_efet = df_efet.loc[(dnorm >= d_ini) & (dnorm <= d_fim)]
-
-st.markdown("#### Pagamentos efetivos por dia")
-st.caption(
-    "Somente parcelas **pagas** (`pago`), agrupadas pela **data de baixa** (`data_quitacao`) "
-    "dentro do período acima. Inclui os filtros de **grupo, marca, fornecedor** e **Ano/Mês** "
-    "(vencimento) do topo, quando usados."
-)
-
-if df_efet.empty:
-    st.info(
-        "Nenhuma parcela paga com data de baixa neste período. "
-        "Ajuste as datas acima ou registre a baixa na seção **Baixa de parcelas** abaixo."
-    )
-else:
-    df_efet["dia_baixa"] = pd.to_datetime(df_efet["data_baixa"]).dt.normalize()
-    tbl_dia = (
-        df_efet.groupby("dia_baixa", as_index=False)
-        .agg(
-            valor_pago=("valor_parcela", "sum"),
-            parcelas_quitadas=("valor_parcela", "count"),
-            pedidos_distintos=("pedido_id", "nunique"),
-        )
-        .sort_values("dia_baixa")
-    )
-    disp = pd.DataFrame(
-        {
-            "Data (baixa)": tbl_dia["dia_baixa"].dt.strftime("%d/%m/%Y"),
-            "Valor pago (R$)": tbl_dia["valor_pago"].map(formatar_moeda_br),
-            "Parcelas quitadas": tbl_dia["parcelas_quitadas"].astype(int),
-            "Pedidos (com baixa neste dia)": tbl_dia["pedidos_distintos"].astype(int),
-        }
-    )
-    st.dataframe(disp, hide_index=True, width="stretch")
-
-st.markdown(
-    f"<p style='font-size:0.9rem;color:#475569;margin:0.75rem 0 0.35rem 0;'>"
-    f"<strong style='color:{COR_PAGAMENTO};'>Registrar pagamento:</strong> "
-    "ao salvar, grava a data de baixa e a parcela passa a contar na visão acima.</p>",
-    unsafe_allow_html=True,
-)
-
-# =========================
-# BAIXA DE PARCELAS (PAGO)
-# =========================
-st.subheader("💳 Baixa de parcelas")
-
-if not TEM_COLUNA_PAGO:
-    st.info(
-        "A coluna **pago** ainda não existe em `pedido_parcelas`. "
-        "Execute o script em `supabase/migrations/001_add_status_columns.sql` no Supabase "
-        "para habilitar a baixa de parcelas aqui. O restante do dashboard continua funcionando."
-    )
-elif "parcela_id" not in df_filtrado.columns or df_filtrado["parcela_id"].isna().all():
-    st.warning("Não foi possível obter o ID das parcelas para baixa.")
-else:
-    st.caption(
-        "Somente parcelas **ainda não pagas** (pendentes). Marque **Pago** e clique em **Salvar**. "
-        "Boletos já quitados somem desta lista e continuam no detalhamento abaixo."
-    )
-
-    df_baixa = df_filtrado[
-        [
-            "parcela_id",
-            "pedido_id",
-            "numero_parcela",
-            "data_pagamento",
-            "fornecedor",
-            "marca",
-            "valor_parcela",
-            "pago",
-        ]
-    ].copy()
-    df_baixa = df_baixa.dropna(subset=["parcela_id"])
-    # Baixa: só pendentes — parcelas já pagas não aparecem aqui
-    df_baixa = df_baixa[~df_baixa["pago"].fillna(False).astype(bool)]
-    df_baixa = df_baixa.sort_values(
-        ["data_pagamento", "pedido_id", "numero_parcela"],
-        na_position="last",
-    )
-
-    if df_baixa.empty:
-        st.info(
-            "Nenhuma parcela **pendente** no filtro atual (todas já pagas ou nenhuma parcela)."
-        )
-    else:
-        df_edit = st.data_editor(
-            df_baixa,
-            column_config={
-                "parcela_id": st.column_config.NumberColumn(
-                    "ID parcela", disabled=True, format="%d"
-                ),
-                "pedido_id": st.column_config.NumberColumn("Pedido", disabled=True, format="%d"),
-                "numero_parcela": st.column_config.NumberColumn(
-                    "Parcela", disabled=True, format="%d"
-                ),
-                "data_pagamento": st.column_config.DateColumn(
-                    "Vencimento", disabled=True, format="DD/MM/YYYY"
-                ),
-                "fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
-                "marca": st.column_config.TextColumn("Marca", disabled=True),
-                "valor_parcela": st.column_config.NumberColumn(
-                    "Valor (R$)", disabled=True, format="%.2f"
-                ),
-                "pago": st.column_config.CheckboxColumn("Pago"),
-            },
-            hide_index=True,
-            width="stretch",
-            key="editor_baixa_parcelas",
-            num_rows="fixed",
-        )
-
-        if st.button("💾 Salvar status de pagamento", key="salvar_baixa"):
-            try:
-                hoje_baixa = data_baixa_hoje_iso()
-                alteradas = 0
-                for _, r in df_edit.iterrows():
-                    orig = df_baixa.loc[
-                        df_baixa["parcela_id"] == r["parcela_id"], "pago"
-                    ].iloc[0]
-                    orig_b = bool(orig) if pd.notna(orig) else False
-                    novo_b = bool(r["pago"]) if pd.notna(r["pago"]) else False
-                    if orig_b != novo_b:
-                        atualizar_parcela_pago(
-                            int(r["parcela_id"]),
-                            novo_b,
-                            data_quitacao=hoje_baixa if novo_b else None,
-                        )
-                        alteradas += 1
-                carregar_financeiro.clear()
-                if alteradas:
-                    st.success(f"Atualizado: {alteradas} parcela(s).")
-                else:
-                    st.info("Nenhuma alteração de status.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao salvar (migração SQL e permissões RLS): {e}")
-
 # =========================
 # META x REALIZADO
 # =========================
 st.divider()
 _secao_fin_header(
-    "3 · Meta x Realizado — Fluxo de Caixa",
+    "2 · Meta x Realizado — Fluxo de Caixa",
     "Comparativo mensal entre a **meta de fluxo de caixa** cadastrada e o **valor realizado** "
     "(soma das parcelas já quitadas no mês pela data de baixa). "
     "Cadastre metas na página **Meta Fluxo de Caixa**.",
@@ -729,8 +556,8 @@ else:
 # =========================
 st.divider()
 _secao_fin_header(
-    "4 · Detalhamento consolidado",
-    "Cada linha mostra **vencimento** e **pagamento** (quando houver) para conferência cruzada.",
+    "3 · Detalhamento consolidado",
+    "Cada linha mostra o **vencimento** para conferência consolidada.",
     "#64748b",
     "rgba(248, 250, 252, 0.95)",
 )
@@ -754,19 +581,8 @@ df_exibir = df_filtrado[
 df_exibir["Data vencimento"] = df_exibir["data_pagamento"].dt.strftime("%d/%m/%Y")
 
 
-def _fmt_data_pagamento_exibicao(row):
-    """Data da baixa; se pago sem data gravada, usa vencimento como referência."""
-    if pd.notna(row["data_quitacao"]):
-        return pd.Timestamp(row["data_quitacao"]).strftime("%d/%m/%Y")
-    if bool(row["pago"]) and pd.notna(row["data_pagamento"]):
-        return pd.Timestamp(row["data_pagamento"]).strftime("%d/%m/%Y")
-    return "—"
-
-
-df_exibir["Data pagamento"] = df_exibir.apply(_fmt_data_pagamento_exibicao, axis=1)
 df_exibir["valor_parcela_fmt"] = df_exibir["valor_parcela"].apply(formatar_moeda_br)
 df_exibir["total_valor_fmt"] = df_exibir["total_valor"].apply(formatar_moeda_br)
-df_exibir["Situação"] = df_exibir["pago"].map(lambda x: "Pago" if x else "Pendente")
 
 df_exibir = df_exibir.rename(
     columns={
@@ -794,13 +610,11 @@ df_exibir = df_exibir[
         "Pedido",
         "Parcela",
         "Data vencimento",
-        "Data pagamento",
         "Fornecedor",
         "Marca",
         "Grupo",
         "Valor da parcela",
         "Valor total do pedido",
-        "Situação",
     ]
 ]
 
@@ -810,14 +624,12 @@ st.dataframe(
     hide_index=True,
     column_config={
         "Data vencimento": st.column_config.TextColumn("Data vencimento", width="small"),
-        "Data pagamento": st.column_config.TextColumn("Data pagamento", width="small"),
         "Fornecedor": st.column_config.TextColumn("Fornecedor", width="large"),
         "Marca": st.column_config.TextColumn("Marca", width="medium"),
         "Valor da parcela": st.column_config.TextColumn("Valor da parcela", width="small"),
         "Valor total do pedido": st.column_config.TextColumn(
             "Valor total do pedido", width="small"
         ),
-        "Situação": st.column_config.TextColumn("Situação", width="small"),
     },
 )
 

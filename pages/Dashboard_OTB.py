@@ -10,6 +10,18 @@ from services.supabase_client import (
     listar_pedidos_resumo,
     sincronizar_recebimento_pedido,
 )
+try:
+    from services.supabase_client import buscar_pedido_ids_por_referencia
+except ImportError:
+    # Fallback para sessões antigas do Streamlit sem recarga completa do módulo.
+    def buscar_pedido_ids_por_referencia(referencias):
+        return set()
+try:
+    from services.supabase_client import buscar_pedido_ids_com_itens_recebidos
+except ImportError:
+    # Fallback para sessões antigas do Streamlit sem recarga completa do módulo.
+    def buscar_pedido_ids_com_itens_recebidos():
+        return set()
 from services.branding import show_sidebar_branding
 import plotly.express as px
 import locale
@@ -54,7 +66,7 @@ st.title("📦 OTB - Planejamento de Compras")
 
 incluir_recebidos_otb = st.checkbox(
     "Incluir pedidos **já recebidos** nos totais, gráficos e hierarquia OTB",
-    value=False,
+    value=True,
     key="otb_incluir_recebidos",
     help="Desligado (padrão): só pedidos ainda não recebidos. Se um grupo (ex.: Masculino) sumiu, "
     "pode ser porque todos os pedidos desse grupo já foram marcados como recebidos — ligue esta opção para vê-los de novo.",
@@ -69,6 +81,14 @@ def carregar_otb(incluir_recebidos: bool):
 
 
 df = carregar_otb(incluir_recebidos_otb)
+
+# Normaliza textos para evitar duplicidades por espaços extras no legado.
+def _norm_txt(v):
+    return " ".join(str(v or "").split())
+
+for _c in ("grupo", "marca", "referencia", "descricao"):
+    if _c in df.columns:
+        df[_c] = df[_c].map(_norm_txt)
 
 # =========================
 # 🔄 TRATAMENTO MÍNIMO
@@ -119,7 +139,12 @@ marca_sel = col2.multiselect("Marca", sorted(df["marca"].dropna().unique()))
 ref_sel = col3.multiselect("Referência", sorted(df["referencia"].dropna().unique()))
 desc_opcoes = sorted(df.loc[df["descricao"] != "", "descricao"].unique())
 desc_sel = col4.multiselect("Descrição", desc_opcoes)
-ano_sel = col5.multiselect("Ano", sorted(df["mes"].dt.year.dropna().unique()))
+anos_disponiveis = sorted(int(a) for a in df["mes"].dt.year.dropna().unique())
+ano_atual = pd.Timestamp.now().year
+anos_default = [a for a in anos_disponiveis if a >= ano_atual]
+if not anos_default and anos_disponiveis:
+    anos_default = [max(anos_disponiveis)]
+ano_sel = col5.multiselect("Ano", anos_disponiveis, default=anos_default)
 mes_sel = col6.multiselect("Mês", sorted(df["mes"].dt.month.dropna().unique()))
 
 # =========================
@@ -174,6 +199,10 @@ ped_rcv = carregar_pedidos_recebimento()
 if ped_rcv.empty:
     st.info("Nenhum pedido cadastrado.")
 else:
+    for _c in ("grupo", "marca", "fornecedor"):
+        if _c in ped_rcv.columns:
+            ped_rcv[_c] = ped_rcv[_c].map(_norm_txt)
+
     if grupo_sel:
         ped_rcv = ped_rcv[ped_rcv["grupo"].isin(grupo_sel)]
     if marca_sel:
@@ -182,6 +211,12 @@ else:
         ids_com_desc = buscar_pedido_ids_por_descricao(desc_sel)
         if ids_com_desc:
             ped_rcv = ped_rcv[ped_rcv["id"].isin(ids_com_desc)]
+        else:
+            ped_rcv = ped_rcv.iloc[0:0]
+    if ref_sel:
+        ids_com_ref = buscar_pedido_ids_por_referencia(ref_sel)
+        if ids_com_ref:
+            ped_rcv = ped_rcv[ped_rcv["id"].isin(ids_com_ref)]
         else:
             ped_rcv = ped_rcv.iloc[0:0]
 
@@ -197,12 +232,16 @@ else:
         ped_rcv = ped_rcv[ped_rcv["data_chegada"].dt.month.isin(mes_sel)]
 
     ver_recebidos = st.checkbox(
-        "Mostrar pedidos recebidos",
+        "Mostrar pedidos/itens recebidos (parcial e total)",
         value=False,
         key="rcv_ver_recebidos",
     )
     if ver_recebidos:
-        ped_rcv = ped_rcv.loc[ped_rcv["recebido"]]
+        ids_com_item_recebido = buscar_pedido_ids_com_itens_recebidos()
+        if ids_com_item_recebido:
+            ped_rcv = ped_rcv.loc[ped_rcv["id"].isin(ids_com_item_recebido)]
+        else:
+            ped_rcv = ped_rcv.iloc[0:0]
     else:
         ped_rcv = ped_rcv.loc[~ped_rcv["recebido"]]
     ped_show = ped_rcv.sort_values("id", ascending=False)
@@ -240,8 +279,24 @@ else:
                 if n_recebidos > 0:
                     st.caption(f"**{n_recebidos}** de **{n_total}** itens já recebidos")
 
-                edited = st.data_editor(
-                    df_itens[["id", "referencia", "descricao", "quantidade", "custo_total", "recebido"]].copy(),
+                if ver_recebidos:
+                    df_itens_view = df_itens.loc[df_itens["recebido"]].copy()
+                else:
+                    df_itens_view = df_itens.loc[~df_itens["recebido"]].copy()
+
+                if df_itens_view.empty:
+                    st.info(
+                        "Nenhum item para exibir neste modo. "
+                        "Altere a opção 'Mostrar pedidos/itens recebidos (parcial e total)'."
+                    )
+                    edited = pd.DataFrame(
+                        columns=["id", "referencia", "descricao", "quantidade", "custo_total", "recebido"]
+                    )
+                else:
+                    edited = st.data_editor(
+                        df_itens_view[
+                            ["id", "referencia", "descricao", "quantidade", "custo_total", "recebido"]
+                        ].copy(),
                     column_config={
                         "id": st.column_config.NumberColumn("ID", disabled=True, format="%d", width="small"),
                         "referencia": st.column_config.TextColumn("Referência", disabled=True),
@@ -254,19 +309,58 @@ else:
                     width="stretch",
                     key=f"editor_itens_{pid_sel}",
                     num_rows="fixed",
-                )
+                    )
 
                 col_salvar, col_todos = st.columns(2)
                 if col_salvar.button("💾 Salvar recebimento", key="salvar_itens_rcv"):
                     try:
+                        def _to_bool(v):
+                            if isinstance(v, bool):
+                                return v
+                            if pd.isna(v):
+                                return False
+                            if isinstance(v, (int, float)):
+                                return bool(int(v))
+                            s = str(v).strip().lower()
+                            return s in ("1", "true", "t", "yes", "sim")
+
                         alteradas = 0
+                        orig_por_id = (
+                            df_itens.set_index("id")[["recebido", "data_recebimento"]].to_dict("index")
+                        )
+                        desejado_por_id = {}
                         for _, row in edited.iterrows():
-                            orig = df_itens.loc[df_itens["id"] == row["id"]].iloc[0]
-                            if bool(orig["recebido"]) == bool(row["recebido"]):
+                            item_id = int(row["id"])
+                            novo_receb = _to_bool(row["recebido"])
+                            desejado_por_id[item_id] = novo_receb
+                            orig = orig_por_id.get(item_id)
+                            if orig is None:
                                 continue
-                            dr = data_baixa_hoje_iso() if row["recebido"] else None
-                            atualizar_item_recebimento(int(row["id"]), bool(row["recebido"]), dr)
+                            orig_receb = _to_bool(orig.get("recebido"))
+                            orig_data = orig.get("data_recebimento")
+                            precisa_preencher_data = novo_receb and (pd.isna(orig_data) or orig_data is None)
+                            if orig_receb == novo_receb and not precisa_preencher_data:
+                                continue
+                            dr = data_baixa_hoje_iso() if novo_receb else None
+                            atualizar_item_recebimento(item_id, novo_receb, dr)
                             alteradas += 1
+
+                        itens_pos = listar_itens_pedido(pid_sel)
+                        falhas = []
+                        for r in itens_pos:
+                            iid = int(r.get("id"))
+                            if iid not in desejado_por_id:
+                                continue
+                            receb_persistido = _to_bool(r.get("recebido"))
+                            if receb_persistido != desejado_por_id[iid]:
+                                falhas.append(iid)
+                        if falhas:
+                            st.error(
+                                "Alguns itens não foram persistidos no banco. "
+                                f"IDs: {', '.join(str(x) for x in falhas[:8])}"
+                            )
+                            st.stop()
+
                         if alteradas:
                             sincronizar_recebimento_pedido(pid_sel)
                             carregar_pedidos_recebimento.clear()
@@ -546,19 +640,14 @@ if total_geral == 0:
 else:
     df_base["perc"] = df_base["total_valor"] / total_geral
 
-st.subheader(
-    "📑 OTB hierárquico (em aberto)"
-    if not incluir_recebidos_otb
-    else "📑 OTB hierárquico (completo)"
-)
+st.subheader("📑 OTB hierárquico")
 if not incluir_recebidos_otb:
     st.caption(
-        "Padrão: só **não recebidos**; a data fica em branco até haver recebimento. "
-        "Se faltar um grupo do cadastro, ele pode estar só em pedidos **já recebidos** — use a opção no topo."
+        "Exibindo somente itens pendentes de recebimento."
     )
 else:
     st.caption(
-        "Inclui recebidos: **Data do recebimento** mostra a data salva no pedido (valor mais recente no agregado)."
+        "Exibindo itens pendentes e recebidos; referências recebidas mostram a data ao lado."
     )
 
 # =========================

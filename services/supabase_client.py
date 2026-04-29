@@ -218,6 +218,7 @@ def listar_itens_pedido(pedido_id):
     """Retorna itens de um pedido com status de recebimento (graceful se colunas não existirem)."""
     consultas = (
         "id, pedido_id, referencia, descricao, quantidade, custo_total, recebido, data_recebimento",
+        "id, pedido_id, referencia, descricao, quantidade, custo_total, recebido",
         "id, pedido_id, referencia, descricao, quantidade, custo_total",
     )
     for cols in consultas:
@@ -246,7 +247,24 @@ def atualizar_item_recebimento(item_id, recebido, data_recebimento=None):
         dados["data_recebimento"] = data_recebimento or data_baixa_hoje_iso()
     else:
         dados["data_recebimento"] = None
-    supabase.table("pedido_itens").update(dados).eq("id", item_id).execute()
+
+    try:
+        supabase.table("pedido_itens").update(dados).eq("id", item_id).execute()
+        return
+    except Exception as e:
+        err = str(e).lower()
+        # Schema parcialmente migrado: aceita atualizar só `recebido`.
+        if "data_recebimento" in err:
+            supabase.table("pedido_itens").update({"recebido": bool(recebido)}).eq("id", item_id).execute()
+            return
+        if "recebido" in err or "pgrst204" in err:
+            raise RuntimeError(
+                "No Supabase, abra SQL Editor e execute (uma vez):\n\n"
+                "ALTER TABLE pedido_itens ADD COLUMN IF NOT EXISTS recebido boolean NOT NULL DEFAULT false;\n"
+                "ALTER TABLE pedido_itens ADD COLUMN IF NOT EXISTS data_recebimento date;\n\n"
+                "Depois atualize a página do dashboard."
+            ) from e
+        raise
 
 
 def sincronizar_recebimento_pedido(pedido_id):
@@ -282,6 +300,54 @@ def buscar_pedido_ids_por_descricao(descricoes: list) -> set:
         return {int(r["pedido_id"]) for r in (resp.data or []) if r.get("pedido_id")}
     except Exception:
         return set()
+
+
+def buscar_pedido_ids_por_referencia(referencias: list) -> set:
+    """Retorna IDs de pedidos que possuem itens com as referências informadas."""
+    if not referencias:
+        return set()
+    try:
+        resp = (
+            supabase.table("pedido_itens")
+            .select("pedido_id")
+            .in_("referencia", referencias)
+            .execute()
+        )
+        return {int(r["pedido_id"]) for r in (resp.data or []) if r.get("pedido_id")}
+    except Exception:
+        return set()
+
+
+def buscar_pedido_ids_com_itens_recebidos() -> set:
+    """Retorna IDs de pedidos que possuem ao menos 1 item recebido."""
+    consultas = (
+        "pedido_id, recebido",
+        "pedido_id",
+    )
+    for cols in consultas:
+        try:
+            resp = supabase.table("pedido_itens").select(cols).execute()
+            rows = resp.data or []
+            if "recebido" in cols:
+                out = set()
+                for r in rows:
+                    pid = r.get("pedido_id")
+                    if not pid:
+                        continue
+                    rec = r.get("recebido")
+                    if isinstance(rec, bool):
+                        ok = rec
+                    else:
+                        s = str(rec).strip().lower()
+                        ok = s in ("true", "t", "1", "yes", "sim")
+                    if ok:
+                        out.add(int(pid))
+                return out
+            # Sem coluna `recebido`, não há como inferir recebimento parcial.
+            return set()
+        except Exception:
+            continue
+    return set()
 
 
 def listar_metas_fluxo_caixa():
@@ -367,7 +433,14 @@ def fetch_otb_pipeline(somente_nao_recebidos: bool = True):
     import pandas as pd
 
     item_cols_tentativas = (
+        # Completo (preferencial)
         "pedido_id, referencia, descricao, quantidade, custo_total, recebido, data_recebimento",
+        # Schema parcial com recebimento por item
+        "pedido_id, referencia, descricao, quantidade, custo_total, recebido",
+        # Mesmo cenário, porém sem `descricao`
+        "pedido_id, referencia, quantidade, custo_total, recebido, data_recebimento",
+        "pedido_id, referencia, quantidade, custo_total, recebido",
+        # Fallback legado sem recebimento por item
         "pedido_id, referencia, descricao, quantidade, custo_total",
         "pedido_id, referencia, quantidade, custo_total",
     )

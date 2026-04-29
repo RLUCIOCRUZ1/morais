@@ -48,6 +48,11 @@ def _erro_tabela_condicoes_ausente(msg: str) -> bool:
     return "pgrst205" in m or "condicoes_pagamento" in m or "schema cache" in m
 
 
+def _normalizar_espacos(texto: str) -> str:
+    """Remove espaços extras no início/fim e múltiplos espaços internos."""
+    return " ".join((texto or "").split())
+
+
 def _ui_instrucoes_sql_condicoes_pagamento():
     sql = _texto_sql_condicoes_pagamento()
     st.markdown(
@@ -115,16 +120,16 @@ def _infer_periodicidade(parcelas):
 
 def _aplicar_pedido_na_sessao(ped_row, itens, parcelas):
     st.session_state.pedido_editando_id = ped_row["id"]
-    st.session_state.fornecedor = (ped_row.get("fornecedor") or "").strip()
-    st.session_state.marca = (ped_row.get("marca") or "").strip()
+    st.session_state.fornecedor = _normalizar_espacos(ped_row.get("fornecedor") or "")
+    st.session_state.marca = _normalizar_espacos(ped_row.get("marca") or "")
     g = ped_row.get("grupo") or "Feminino"
     st.session_state.grupo_pedido = g if g in GRUPOS else "Feminino"
     st.session_state.data_chegada = pd.to_datetime(ped_row["data_chegada"]).date()
     st.session_state.itens = [
         {
             "id": x["id"],
-            "referencia": (x.get("referencia") or "").strip(),
-            "descricao": (x.get("descricao") or "").strip(),
+            "referencia": _normalizar_espacos(x.get("referencia") or ""),
+            "descricao": _normalizar_espacos(x.get("descricao") or ""),
             "quantidade": int(x.get("quantidade", 1)),
             "custo": float(x.get("custo_unitario", 0)),
         }
@@ -450,8 +455,8 @@ for i, item in enumerate(st.session_state.itens):
 
     st.session_state.itens[i] = {
         "id": item.get("id"),
-        "referencia": referencia,
-        "descricao": descricao,
+        "referencia": _normalizar_espacos(referencia),
+        "descricao": _normalizar_espacos(descricao),
         "quantidade": quantidade,
         "custo": custo
     }
@@ -670,8 +675,10 @@ _btn_label = (
 )
 
 if st.button(_btn_label, width="stretch"):
+    fornecedor_norm = _normalizar_espacos(fornecedor)
+    marca_norm = _normalizar_espacos(marca)
 
-    if not fornecedor:
+    if not fornecedor_norm:
         st.warning("Informe o fornecedor")
         st.stop()
 
@@ -681,9 +688,9 @@ if st.button(_btn_label, width="stretch"):
 
     try:
         pedido_data = {
-            "fornecedor": fornecedor,
+            "fornecedor": fornecedor_norm,
             "grupo": grupo,
-            "marca": marca,
+            "marca": marca_norm,
             "data_chegada": data_chegada.strftime("%Y-%m-%d"),
             "total_quantidade": total_qtd,
             "total_valor": total_geral,
@@ -694,8 +701,8 @@ if st.button(_btn_label, width="stretch"):
             total_item = item["quantidade"] * item["custo"]
             itens_insert.append(
                 {
-                    "referencia": item["referencia"],
-                    "descricao": item.get("descricao", ""),
+                    "referencia": _normalizar_espacos(item["referencia"]),
+                    "descricao": _normalizar_espacos(item.get("descricao", "")),
                     "quantidade": item["quantidade"],
                     "custo_unitario": item["custo"],
                     "custo_total": total_item,
