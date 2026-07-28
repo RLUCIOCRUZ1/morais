@@ -214,6 +214,161 @@ def atualizar_pedido_recebimento(pedido_id, recebido, data_recebimento=None):
     return response.data
 
 
+def _parse_date_iso(val):
+    """Converte valor de data (str/date) para date, ou None."""
+    from datetime import date, datetime
+
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    return datetime.fromisoformat(s[:10]).date()
+
+
+def _coerce_prazos_dias(val):
+    """Normaliza jsonb/list/str de prazos para lista de ints."""
+    import json
+
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [int(x) for x in val]
+    if isinstance(val, str):
+        return [int(x) for x in json.loads(val)]
+    try:
+        return [int(x) for x in val]
+    except (TypeError, ValueError):
+        return []
+
+
+def _parcela_esta_paga(parcela: dict) -> bool:
+    pago = parcela.get("pago")
+    if isinstance(pago, bool):
+        return pago
+    if pago is None:
+        return False
+    s = str(pago).strip().lower()
+    return s in ("true", "t", "1", "yes", "sim")
+
+
+def _buscar_pedido_para_vencimentos(pedido_id):
+    """Carrega pedido com prazos; graceful se a coluna ainda não existir."""
+    consultas = (
+        "id, data_chegada, prazos_dias",
+        "id, data_chegada",
+    )
+    for cols in consultas:
+        try:
+            ped = (
+                supabase.table("pedidos")
+                .select(cols)
+                .eq("id", pedido_id)
+                .limit(1)
+                .execute()
+            )
+            if not ped.data:
+                return None
+            row = ped.data[0]
+            row.setdefault("prazos_dias", None)
+            return row
+        except Exception:
+            continue
+    return None
+
+
+def _persistir_prazos_dias_pedido(pedido_id, prazos_dias: list):
+    """Salva prazos no pedido (no-op se a coluna ainda não existir)."""
+    try:
+        supabase.table("pedidos").update({"prazos_dias": [int(x) for x in prazos_dias]}).eq(
+            "id", pedido_id
+        ).execute()
+    except Exception:
+        pass
+
+
+def recalcular_vencimentos_pedido(pedido_id, data_base=None):
+    """Recalcula ``data_pagamento`` das parcelas não pagas a partir de uma data-base.
+
+    - Com ``data_base`` (recebimento real): vencimento = data_base + prazos[k]
+    - Sem ``data_base``: restaura o previsto com ``data_chegada`` + prazos[k]
+
+    Títulos diretos (1 parcela) e parcelados usam a mesma lógica.
+    Parcelas já baixadas (``pago``) não são alteradas.
+    Retorna a quantidade de parcelas atualizadas.
+    """
+    from datetime import timedelta
+
+    ped = _buscar_pedido_para_vencimentos(pedido_id)
+    if not ped:
+        return 0
+
+    parcelas = []
+    for cols in (
+        "id, numero_parcela, data_pagamento, pago",
+        "id, numero_parcela, data_pagamento",
+    ):
+        try:
+            pars_resp = (
+                supabase.table("pedido_parcelas")
+                .select(cols)
+                .eq("pedido_id", pedido_id)
+                .order("numero_parcela")
+                .execute()
+            )
+            parcelas = pars_resp.data or []
+            break
+        except Exception:
+            continue
+    if not parcelas:
+        return 0
+
+    prazos_raw = ped.get("prazos_dias")
+    if prazos_raw is not None:
+        prazos = _coerce_prazos_dias(prazos_raw)
+        # Lista vazia = modo periodicidade (não ancorado na entrega).
+        if not prazos:
+            return 0
+    else:
+        prazos = []
+        d_ch = _parse_date_iso(ped.get("data_chegada"))
+        if not d_ch:
+            return 0
+        for p in parcelas:
+            d_pay = _parse_date_iso(p.get("data_pagamento"))
+            if d_pay is None:
+                return 0
+            prazos.append(max(0, (d_pay - d_ch).days))
+        if prazos:
+            _persistir_prazos_dias_pedido(pedido_id, prazos)
+
+    if not prazos:
+        return 0
+
+    base = _parse_date_iso(data_base) or _parse_date_iso(ped.get("data_chegada"))
+    if not base:
+        return 0
+
+    atualizadas = 0
+    for i, p in enumerate(parcelas):
+        if _parcela_esta_paga(p):
+            continue
+        dias = int(prazos[i] if i < len(prazos) else prazos[-1])
+        nova = (base + timedelta(days=dias)).isoformat()
+        atual = str(p.get("data_pagamento") or "")[:10]
+        if atual == nova:
+            continue
+        supabase.table("pedido_parcelas").update({"data_pagamento": nova}).eq(
+            "id", p["id"]
+        ).execute()
+        atualizadas += 1
+    return atualizadas
+
+
 def listar_itens_pedido(pedido_id):
     """Retorna itens de um pedido com status de recebimento (graceful se colunas não existirem)."""
     consultas = (
@@ -271,19 +426,25 @@ def sincronizar_recebimento_pedido(pedido_id):
     """Se todos os itens estão recebidos, marca o pedido como recebido.
 
     Se ao menos um item está pendente, marca o pedido como não recebido.
-    Retorna True se o pedido ficou 100% recebido.
+    Ao confirmar recebimento total, recalcula vencimentos das duplicatas não pagas
+    com base na ``data_recebimento``. Se o pedido voltar a pendente, restaura os
+    vencimentos previstos (``data_chegada`` + prazos).
+
+    Retorna dict: ``{"recebido": bool, "parcelas_atualizadas": int, "data_base": str|None}``.
     """
     itens = listar_itens_pedido(pedido_id)
     if not itens:
-        return False
+        return {"recebido": False, "parcelas_atualizadas": 0, "data_base": None}
     todos_recebidos = all(r.get("recebido", False) for r in itens)
     if todos_recebidos:
         datas = [r["data_recebimento"] for r in itens if r.get("data_recebimento")]
         data_max = max(datas) if datas else data_baixa_hoje_iso()
         atualizar_pedido_recebimento(pedido_id, True, data_recebimento=data_max)
-    else:
-        atualizar_pedido_recebimento(pedido_id, False)
-    return todos_recebidos
+        n = recalcular_vencimentos_pedido(pedido_id, data_base=data_max)
+        return {"recebido": True, "parcelas_atualizadas": n, "data_base": data_max}
+    atualizar_pedido_recebimento(pedido_id, False)
+    n = recalcular_vencimentos_pedido(pedido_id, data_base=None)
+    return {"recebido": False, "parcelas_atualizadas": n, "data_base": None}
 
 
 def buscar_pedido_ids_por_descricao(descricoes: list) -> set:

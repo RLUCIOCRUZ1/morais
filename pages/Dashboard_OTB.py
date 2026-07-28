@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from services.supabase_client import (
     atualizar_item_recebimento,
-    atualizar_pedido_recebimento,
     buscar_pedido_ids_por_descricao,
     data_baixa_hoje_iso,
     fetch_otb_pipeline,
@@ -192,7 +191,9 @@ def carregar_pedidos_recebimento():
 st.subheader("📬 Controle de recebimento")
 st.caption(
     "Selecione um pedido para ver seus itens e marcar quais foram recebidos. "
-    "Quando todos os itens forem marcados, o pedido fecha automaticamente."
+    "Quando todos os itens forem marcados, o pedido fecha automaticamente e os "
+    "**vencimentos das duplicatas** (título direto ou parcelado) são recalculados "
+    "com a data real de recebimento."
 )
 
 ped_rcv = carregar_pedidos_recebimento()
@@ -362,10 +363,24 @@ else:
                             st.stop()
 
                         if alteradas:
-                            sincronizar_recebimento_pedido(pid_sel)
+                            sync = sincronizar_recebimento_pedido(pid_sel)
                             carregar_pedidos_recebimento.clear()
                             carregar_otb.clear()
-                            st.success(f"{alteradas} item(ns) atualizado(s).")
+                            msg = f"{alteradas} item(ns) atualizado(s)."
+                            n_parc = int((sync or {}).get("parcelas_atualizadas") or 0)
+                            if sync and sync.get("recebido") and n_parc:
+                                msg += (
+                                    f" Pedido recebido: {n_parc} vencimento(s) "
+                                    "recalculado(s) pela data de recebimento."
+                                )
+                            elif sync and sync.get("recebido"):
+                                msg += " Pedido marcado como recebido."
+                            elif n_parc:
+                                msg += (
+                                    f" {n_parc} vencimento(s) restaurado(s) "
+                                    "para a previsão de chegada."
+                                )
+                            st.success(msg)
                         else:
                             st.info("Nenhuma alteração.")
                         st.rerun()
@@ -378,10 +393,17 @@ else:
                         for item in itens:
                             if not item.get("recebido", False):
                                 atualizar_item_recebimento(int(item["id"]), True, hoje)
-                        sincronizar_recebimento_pedido(pid_sel)
+                        sync = sincronizar_recebimento_pedido(pid_sel)
                         carregar_pedidos_recebimento.clear()
                         carregar_otb.clear()
-                        st.success("Todos os itens marcados como recebidos.")
+                        msg = "Todos os itens marcados como recebidos."
+                        n_parc = int((sync or {}).get("parcelas_atualizadas") or 0)
+                        if n_parc:
+                            msg += (
+                                f" {n_parc} vencimento(s) recalculado(s) "
+                                "pela data de recebimento."
+                            )
+                        st.success(msg)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")

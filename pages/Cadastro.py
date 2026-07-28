@@ -33,6 +33,15 @@ _SQL_CONDICOES_PAGAMENTO_PATH = os.path.normpath(
         "005_condicoes_pagamento.sql",
     )
 )
+_SQL_PRAZOS_PEDIDO_PATH = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "supabase",
+        "migrations",
+        "009_pedidos_prazos_dias.sql",
+    )
+)
 
 
 def _texto_sql_condicoes_pagamento():
@@ -43,9 +52,22 @@ def _texto_sql_condicoes_pagamento():
         return ""
 
 
+def _texto_sql_prazos_pedido():
+    try:
+        with open(_SQL_PRAZOS_PEDIDO_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def _erro_tabela_condicoes_ausente(msg: str) -> bool:
     m = (msg or "").lower()
     return "pgrst205" in m or "condicoes_pagamento" in m or "schema cache" in m
+
+
+def _erro_coluna_prazos_ausente(msg: str) -> bool:
+    m = (msg or "").lower()
+    return "prazos_dias" in m or "pgrst204" in m
 
 
 def _normalizar_espacos(texto: str) -> str:
@@ -146,7 +168,10 @@ def _aplicar_pedido_na_sessao(ped_row, itens, parcelas):
     st.session_state.cond_pg_modo = "dias"
     st.session_state.form_key += 1
     fk = st.session_state.form_key
-    pr_inf = _inferir_prazos_dias_de_parcelas(ped_row["data_chegada"], parcelas)
+    pr_stored = _coerce_prazos_list(ped_row.get("prazos_dias"))
+    pr_inf = pr_stored or _inferir_prazos_dias_de_parcelas(
+        ped_row["data_chegada"], parcelas
+    )
     for i in range(max(st.session_state.qtd_parcelas_inp, 1)):
         st.session_state[f"prazo_parcela_{i}_{fk}"] = (
             pr_inf[i] if i < len(pr_inf) else (pr_inf[-1] if pr_inf else 30)
@@ -352,6 +377,18 @@ if "sucesso" in st.session_state:
     st.success(st.session_state.sucesso)
     del st.session_state.sucesso
 
+if "aviso_sql_prazos" in st.session_state:
+    sql_aviso = st.session_state.aviso_sql_prazos
+    del st.session_state.aviso_sql_prazos
+    st.warning(
+        "A coluna **prazos_dias** ainda não existe no banco. "
+        "Execute a migração abaixo no SQL Editor do Supabase para habilitar "
+        "o recálculo automático dos vencimentos no recebimento."
+    )
+    if sql_aviso:
+        with st.expander("📋 SQL — migração 009_pedidos_prazos_dias", expanded=True):
+            st.code(sql_aviso, language="sql")
+
 
 
 
@@ -509,8 +546,9 @@ modo_pg = st.session_state.cond_pg_modo
 if modo_pg == "dias":
     st.caption(
         "**Padrão mercado:** cada parcela usa **dias corridos após a data de chegada** "
-        "(entrega). Ex.: chegada 10/06, 2x com 75 e 105 → vencimentos 24/08 e 23/11 "
-        "(sempre somando a partir da **mesma** data de chegada)."
+        "(entrega prevista). Ex.: chegada 10/06, 2x com 75 e 105 → vencimentos 24/08 e 23/11. "
+        "Ao confirmar o **recebimento no OTB**, os vencimentos (direto ou parcelado) são "
+        "recalculados automaticamente com a data real de entrega."
     )
     lista_cp = _condicoes_pagamento_cached()
     if not lista_cp:
@@ -712,6 +750,7 @@ if st.button(_btn_label, width="stretch"):
         nparc = int(qtd_parcelas)
         parcelas_insert = []
         valor_base = round(total_geral / nparc, 2)
+        editando = bool(st.session_state.pedido_editando_id)
 
         if st.session_state.cond_pg_modo == "dias":
             fk_sv = st.session_state.form_key
@@ -719,6 +758,7 @@ if st.button(_btn_label, width="stretch"):
                 int(st.session_state.get(f"prazo_parcela_{i}_{fk_sv}", 0))
                 for i in range(nparc)
             ]
+            pedido_data["prazos_dias"] = prazos_salvar
             datas_pg = _datas_vencimento_por_prazos(data_chegada, prazos_salvar)
             for i in range(nparc):
                 if i == nparc - 1:
@@ -735,6 +775,8 @@ if st.button(_btn_label, width="stretch"):
                     }
                 )
         else:
+            # Periodicidade fixa: não recalcula na entrega.
+            pedido_data["prazos_dias"] = []
             for i in range(nparc):
                 if i == nparc - 1:
                     valor_parcela = round(
@@ -762,9 +804,29 @@ if st.button(_btn_label, width="stretch"):
                     }
                 )
 
-        if st.session_state.pedido_editando_id:
-            pedido_id = st.session_state.pedido_editando_id
-            atualizar_pedido(pedido_id, pedido_data)
+        sem_coluna_prazos = False
+        try:
+            if editando:
+                pedido_id = st.session_state.pedido_editando_id
+                atualizar_pedido(pedido_id, pedido_data)
+            else:
+                pedido_insert = inserir_pedido(pedido_data)
+                pedido_id = pedido_insert[0]["id"]
+        except Exception as err_ped:
+            if "prazos_dias" not in pedido_data or not _erro_coluna_prazos_ausente(
+                str(err_ped)
+            ):
+                raise
+            sem_coluna_prazos = True
+            dados_sem = {k: v for k, v in pedido_data.items() if k != "prazos_dias"}
+            if editando:
+                pedido_id = st.session_state.pedido_editando_id
+                atualizar_pedido(pedido_id, dados_sem)
+            else:
+                pedido_insert = inserir_pedido(dados_sem)
+                pedido_id = pedido_insert[0]["id"]
+
+        if editando:
             deletar_itens_pedido(pedido_id)
             for row in itens_insert:
                 row["pedido_id"] = pedido_id
@@ -776,8 +838,6 @@ if st.button(_btn_label, width="stretch"):
             st.session_state.sucesso = f"Pedido {pedido_id} atualizado com sucesso!"
             st.session_state.pedido_editando_id = None
         else:
-            pedido_insert = inserir_pedido(pedido_data)
-            pedido_id = pedido_insert[0]["id"]
             for row in itens_insert:
                 row["pedido_id"] = pedido_id
             inserir_itens(itens_insert)
@@ -786,9 +846,21 @@ if st.button(_btn_label, width="stretch"):
             inserir_parcelas(parcelas_insert)
             st.session_state.sucesso = f"Pedido salvo com sucesso! ID: {pedido_id}"
 
+        if sem_coluna_prazos:
+            st.session_state.aviso_sql_prazos = _texto_sql_prazos_pedido()
+
         st.cache_data.clear()
         _limpar_estado_formulario_cadastro()
         st.rerun()
 
     except Exception as e:
         st.error(f"Erro ao salvar: {e}")
+        if _erro_coluna_prazos_ausente(str(e)):
+            sql_prazos = _texto_sql_prazos_pedido()
+            with st.expander("📋 Criar coluna prazos_dias no Supabase", expanded=True):
+                if sql_prazos:
+                    st.code(sql_prazos, language="sql")
+                else:
+                    st.warning(
+                        "Abra manualmente `supabase/migrations/009_pedidos_prazos_dias.sql`."
+                    )
